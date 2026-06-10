@@ -8,7 +8,7 @@ from google.genai import types
 # ===========================================================================
 # 🔑 PASTE YOUR ACTUAL GEMINI API KEY HERE
 # ===========================================================================
-MY_GEMINI_KEY = "AIzaSyBqWsObIQkVrjqKpUMbt4CR6mVjaAVavbU" 
+MY_GEMINI_KEY = "YOUR_API_KEY" 
 
 # Initialize the official 2026 Google Gen AI client explicitly passing the key
 client = genai.Client(api_key=MY_GEMINI_KEY)
