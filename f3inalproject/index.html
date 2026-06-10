@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LOKA | Bespoke Luxury Travel Planner</title>
+    <meta name="description" content="LOKA 是一款超輕量奢華風格旅行規劃助手，結合 AI 提供巴里島行程與真實道路導航規劃。">
+
+    <!-- 引入高質感 Google Font (Outfit) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- 引入 Leaflet CSS (本地伺服) -->
+    <link rel="stylesheet" href="/static/leaflet.css" />
+
+    <!-- 引入 React 與 ReactDOM (本地伺服) -->
+    <script src="/static/react.development.js"></script>
+    <script src="/static/react-dom.development.js"></script>
+
+    <!-- 引入 Babel Standalone 以在瀏覽器中即時解析 JSX (本地伺服) -->
+    <script src="/static/babel.min.js"></script>
+
+    <!-- 引入 Tailwind CSS (本地伺服) 並設定深綠白奢華主題 -->
+    <script src="/static/tailwind.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        loka: {
+                            bg: '#0A3B2E',       // 奢華深綠底色
+                            accent: '#FFFFFF',   // 純白設計線條/文字
+                            tint: '#114D3E',     // 稍微亮一點的深綠容器
+                            light: '#E2F1ED',    // 淺綠白相間
+                            border: 'rgba(255,255,255,0.15)'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Leaflet JS (本地伺服) -->
+    <script src="/static/leaflet.js"></script>
+
+    <style>
+        /* 全域樣式微調 */
+        body {
+            background-color: #0A3B2E;
+            color: #FFFFFF;
+            font-family: 'Outfit', sans-serif;
+            overflow-x: hidden;
+        }
+
+        /* 滾動條美化 */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        /* 移除 Leaflet 預設的一些邊框與字體，統一奢華風格 */
+        .leaflet-container {
+            font-family: 'Outfit', sans-serif !important;
+            background: #0A3B2E !important;
+        }
+    </style>
+</head>
+
+<body class="h-screen w-screen overflow-hidden flex flex-col">
+    <!-- 全域錯誤與協定檢測 -->
+    <script>
+        // 渲染診斷訊息的通用函式
+        function showError(title, htmlContent) {
+            const root = document.getElementById('root');
+            if (root) {
+                // 若已渲染過同類型的錯誤，則避免重複添加
+                if (root.innerHTML.indexOf(title) !== -1) return;
+
+                root.innerHTML = `
+                    <div style="padding: 24px; background: rgba(20, 5, 5, 0.7); backdrop-filter: blur(16px); border: 1px solid rgba(255, 100, 100, 0.3); color: #ffcccc; font-family: 'Outfit', sans-serif; border-radius: 16px; margin: 40px auto; max-width: 800px; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.7); line-height: 1.6;">
+                        <h3 style="margin-top: 0; color: #ff5555; font-size: 18px; font-weight: bold; border-bottom: 1px solid rgba(255,100,100,0.2); padding-bottom: 8px; letter-spacing: 0.05em;">[LOKA System Diagnostic]</h3>
+                        <h4 style="margin: 12px 0; font-size: 14px; font-weight: bold; color: #ff8888;">${title}</h4>
+                        <div style="margin: 12px 0; font-size: 13px;">${htmlContent}</div>
+                        <div style="margin-top: 20px; font-size: 11px; color: rgba(255,255,255,0.4); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px;">
+                            提示：請確保您的筆電已連上網路，且您是透過 <strong>http://127.0.0.1:8000</strong> 造訪網頁。若問題持續存在，請嘗試更換 DNS（如 8.8.8.8）或重啟本地後端服務。
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        // 1. 監聽資源載入錯誤（如 CDN、JS 或 CSS 404 等，需設定 capture = true）
+        window.addEventListener('error', function (event) {
+            // 🛑 PREVENT CRASH BYPASS: Ignore image loading failures
+            if (event.target && event.target.tagName === 'IMG') {
+                console.warn("[LOKA Engine Auto-Filter] Bypassed non-JS asset layout resource rejection error:", event.target.src);
+                return; // Exit silently so it does not destroy your dashboard display
+            }
+
+            // 資源載入失敗 (e.g. SCRIPT 或 LINK 404)
+            if (event.target && (event.target.tagName === 'SCRIPT' || event.target.tagName === 'LINK')) {
+                const url = event.target.src || event.target.href;
+                showError(
+                    "資源載入失敗 (CDN 站點或本地檔案可能無法存取)",
+                    `無法順利載入資源：<span style="color: #ffaa66; font-family: monospace; word-break: break-all;">${url}</span><br>這通常是因為網路連線異常，或 CDN 服務商的連線被阻擋或發生逾時。`
+                );
+            } else {
+                // 一般 JavaScript 執行期錯誤
+                const errorMsg = event.message || (event.error ? event.error.message : 'Unknown Runtime Evaluation Exception');
+                const sourceFile = event.filename || (event.error && event.error.fileName ? event.error.fileName : 'Dynamic Standalone Script Asset');
+                const lineNo = event.lineno !== undefined ? event.lineno : 'N/A';
+                const colNo = event.colno !== undefined ? event.colno : 'N/A';
+
+                showError(
+                    "JavaScript 執行期異常",
+                    `<strong>Error Message:</strong> <span style="color: #ff8888; font-family: monospace;">${errorMsg}</span><br>` +
+                    `<strong>Source Script File:</strong> <span style="color: #ffaa66; font-family: monospace;">${sourceFile}</span><br>` +
+                    `<strong>Position Matrix:</strong> Line ${lineNo}, Col ${colNo}`
+                );
+            }
+        }, true); // 使用 capture 階段以攔截無法冒泡的資源載入錯誤
+
+        // 2. 監聽未處理的 Promise 拒絕（用於捕捉 Babel 轉譯非同步錯誤）
+        window.addEventListener('unhandledrejection', function (event) {
+            const reasonMsg = event.reason ? (event.reason.message || event.reason) : '未知錯誤原因';
+            const stackTrace = event.reason && event.reason.stack ? event.reason.stack : '無堆疊追蹤資訊';
+            showError(
+                "未處理的 Promise 拒絕 (可能是 Babel 編譯錯誤或網路 API 請求失敗)",
+                `<strong>原因：</strong> ${reasonMsg}<br>
+                 <strong>詳細資訊：</strong><pre style="font-size: 11px; margin-top: 5px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; overflow-x: auto; color: #ffaacc; font-family: monospace; border: 1px solid rgba(255,255,255,0.05);">${stackTrace}</pre>`
+            );
+        });
+
+        // 3. 頁面載入後，定時檢查 React 等關鍵全域變數是否正常存在
+        window.addEventListener('load', function () {
+            setTimeout(function () {
+                if (typeof React === 'undefined' || typeof ReactDOM === 'undefined') {
+                    showError(
+                        "React 核心庫缺失",
+                        "無法從網路載入 React 或 ReactDOM。請檢查您的網路連線是否正常，或是重整頁面以重新嘗試載入。"
+                    );
+                } else if (typeof Babel === 'undefined') {
+                    showError(
+                        "Babel 轉譯器缺失",
+                        "無法從網路載入 Babel Standalone。瀏覽器將無法即時解析 JSX 程式碼，導致元件無法正常渲染。"
+                    );
+                }
+            }, 3000); // 載入完成 3 秒後自動執行健診
+        });
+
+        if (window.location.protocol === 'file:') {
+            alert('【LOKA 系統提示】\n偵測到您直接以檔案路徑 (file://) 開啟 HTML 檔案。\n\n由於瀏覽器的同源安全政策 (CORS) 限制，直接開啟時 Babel 將無法載入外部的 JSX 元件。請務必在終端機啟動後端服務，並使用瀏覽器造訪 http://127.0.0.1:8000 進行體驗！');
+        }
+    </script>
+
+    <!-- React 掛載點 -->
+    <div id="root" class="flex-grow flex flex-col h-full w-full"></div>
+
+    <!-- 載入 React JSX 元件，注意載入順序 (MapComponent 先，App 後) -->
+    <script type="text/babel" src="MapComponent.jsx"></script>
+    <script type="text/babel" src="App.jsx"></script>
+</body>
+
+</html>

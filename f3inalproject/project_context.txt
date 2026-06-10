@@ -1,0 +1,2046 @@
+你是一個專業的軟體工程師。以下是我的專案 f3inalproject 的所有原始碼檔案。
+請仔細閱讀這些檔案的內容，並在後續的對話中協助我進行功能修改。
+
+<project_files>
+
+<file path="ai_engine.py">
+import os
+import json
+from pydantic import BaseModel, Field
+from typing import List
+from google import genai
+from google.genai import types
+
+# ===========================================================================
+# 🔑 PASTE YOUR ACTUAL GEMINI API KEY HERE
+# ===========================================================================
+MY_GEMINI_KEY = "AIzaSyBqWsObIQkVrjqKpUMbt4CR6mVjaAVavbU" 
+
+# Initialize the official 2026 Google Gen AI client explicitly passing the key
+client = genai.Client(api_key=MY_GEMINI_KEY)
+
+# ---------------------------------------------------------------------------
+# Pydantic Structural Schema Definitions (Enforces Clean Frontend Data Pipes)
+# ---------------------------------------------------------------------------
+class TransportSchema(BaseModel):
+    carrier: str = Field(description='Suggested luxury airline or regional transport')
+    estimated_cost: str = Field(description='Cost formatted in IDR and USD')
+    booking_search_query: str = Field(description='URL encoded string for flight lookup, e.g., Flights+from+Taipei+to+Bali')
+
+class LodgingSchema(BaseModel):
+    name: str = Field(description='Luxury resort name')
+    description: str = Field(description='High-end breakdown of lodging amenities')
+    latitude: float
+    longitude: float
+    booking_search_query: str = Field(description='URL encoded search string for hotel lookup, e.g., Mandapa+A+Ritz+Carlton+Reserve+Bali')
+
+class PlaceSchema(BaseModel):
+    title: str
+    description: str
+    latitude: float
+    longitude: float
+    maps_search_query: str = Field(description='Clean keyword string for Google Maps, e.g., Pura+Tanah+Lot+Bali')
+    image_url: str = Field(description='Valid travel placeholder visualization keyword array query link from Unsplash source structural IDs.')
+
+class DaySchema(BaseModel):
+    day: int
+    places: List[PlaceSchema]
+
+class ItinerarySchema(BaseModel):
+    destination: str
+    start_date: str
+    end_date: str
+    flight_logistics: TransportSchema
+    hotel_logistics: LodgingSchema
+    days: List[DaySchema]
+
+# ---------------------------------------------------------------------------
+# Main Generation Logic called by main.py
+# ---------------------------------------------------------------------------
+def generate_travel_itinerary(user_prompt: str) -> dict:
+    """
+    Queries Google Gemini using structured JSON output schemas to build an 
+    optimized, loop-free itinerary matching the Wanderlog parameters.
+    """
+    system_instruction = (
+        "You are LOKA, an elite luxury travel planning intelligence engine.\n"
+        "CRITICAL NEGATIVE CONSTRAINTS:\n"
+        "1. Every landmark, attraction title, and coordinate pair must be completely unique.\n"
+        "2. Do not repeat or loop locations across multiple days or time slots.\n"
+        "3. Do not output any outbound links, ticket booking URLs, or external agency formulas.\n"
+        "4. All cost formatting in flight_logistics must include IDR and USD conversions.\n"
+        "5. The booking_search_query and maps_search_query fields must be URL encoded (e.g. spaces replaced with '+').\n"
+        "6. The image_url field in PlaceSchema must be a valid, high-resolution Unsplash photo URL relevant to the specific attraction, containing a real photo ID, e.g., 'https://images.unsplash.com/photo-1537996194471-e657df975ab4?auto=format&fit=crop&w=600&q=80'."
+    )
+
+    try:
+        # Call Gemini 2.5 Flash using the explicit structured JSON config format
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=f"Generate a bespoke luxury trip matching these user parameters: {user_prompt}",
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                response_mime_type="application/json",
+                response_schema=ItinerarySchema,
+                temperature=0.2,
+            ),
+        )
+        
+        # Parse output safely directly back into native dict format for FastAPI
+        return json.loads(response.text)
+        
+    except Exception as e:
+        # If something breaks, print it clearly to the terminal window so we can see it
+        print(f"\n[CRITICAL ERROR] Gemini Engine Failed: {str(e)}\n")
+        raise e
+</file>
+
+<file path="App.jsx">
+const { useState, useEffect } = React;
+
+// ---------------------------------------------------------------------------
+// 內建展示行程 (為預防簡報展示時無 Gemini API 金鑰或網路中斷提供防護)
+// ---------------------------------------------------------------------------
+const defaultBaliItinerary = { /* [已精簡] 預設展示行程資料，包含 destination, start_date, end_date, flight_logistics, hotel_logistics, days 等 (約 80 行) */ };
+
+// ---------------------------------------------------------------------------
+// 多語系字典定義
+// ---------------------------------------------------------------------------
+const dictionary = { /* [已精簡] 多語系對照字典，包含 en 與 zh-tw 對譯字詞 (約 190 行) */ };
+
+// ---------------------------------------------------------------------------
+// 優雅圖片後備元件 (Graceful Image Fallback Component)
+// ---------------------------------------------------------------------------
+const GracefulImage = ({ src, alt, title }) => {
+    const [hasError, setHasError] = useState(false);
+
+    if (hasError || !src) {
+        return (
+            <div className="w-full h-40 rounded-t-xl bg-gradient-to-br from-slate-800 to-emerald-800 flex flex-col items-center justify-center p-4 text-center text-white relative overflow-hidden">
+                <div className="absolute inset-0 opacity-10 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-white via-transparent to-transparent"></div>
+                
+                {/* 地球 Vector Icon (SVG) */}
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-emerald-300/85 mb-2.5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 002 2h2m-4-3h.01M1.112 18C1.583 14.07 4.908 11 9 11c4.092 0 7.417 3.07 7.888 7m-1.782-4h.01M22 12a10 10 0 11-20 0 10 10 0 0120 0z" />
+                </svg>
+                
+                <span className="text-[11px] font-extrabold tracking-wide uppercase px-2 line-clamp-2 drop-shadow-md z-10">
+                    {title || alt}
+                </span>
+            </div>
+        );
+    }
+
+    return (
+        <img
+            src={src}
+            alt={alt}
+            onError={() => setHasError(true)}
+            className="w-full h-40 object-cover rounded-t-xl transition-all duration-300"
+        />
+    );
+};
+
+const App = () => {
+    // 系統狀態
+    const [lang, setLang] = useState('zh-tw'); // 預設使用繁體中文
+    const [token, setToken] = useState(localStorage.getItem('loka_token') || '');
+    const [user, setUser] = useState(null);
+    const [authMode, setAuthMode] = useState('login'); // login | register
+    const [usernameInput, setUsernameInput] = useState('');
+    const [passwordInput, setPasswordInput] = useState('');
+    const [emailInput, setEmailInput] = useState('');
+    const [errorMsg, setErrorMsg] = useState('');
+
+    // 業務狀態與 Wanderlog 式輸入狀態
+    const [destination, setDestination] = useState('');
+    const [peopleCount, setPeopleCount] = useState(1);
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
+    const [focusedCoords, setFocusedCoords] = useState(null); // Tracks flyTo coordinates
+    const [showPaywall, setShowPaywall] = useState(false);
+    const [cardData, setCardData] = useState({ card_number: '', expiry: '', cvv: '' });
+    const [loading, setLoading] = useState(false);
+    const [itinerary, setItinerary] = useState(null);
+    const [checkedActivities, setCheckedActivities] = useState({}); // 用於記錄景點打卡狀態
+
+    // 模擬金流付費與匯出狀態
+    const [paymentLoading, setPaymentLoading] = useState(false);
+    const [toastMessage, setToastMessage] = useState('');
+
+    // 安全非同步地圖載入狀態，防止 React 因渲染 undefined 組件而崩潰
+    const [mapLoaded, setMapLoaded] = useState(false);
+
+    const t = dictionary[lang];
+
+    // 初始化時若有 Token 則自動載入使用者狀態
+    useEffect(() => {
+        if (token) {
+            fetchUserProfile();
+        }
+    }, [token]);
+
+    // 輪詢檢測全域變數 window.MapComponent 是否已被 Babel standalone 解析完成
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (window.MapComponent) {
+                setMapLoaded(true);
+                clearInterval(interval);
+            }
+        }, 100);
+        return () => clearInterval(interval);
+    }, []);
+
+    const fetchUserProfile = async () => {
+        try {
+            const res = await fetch('/api/me', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setUser(data);
+            } else {
+                handleLogout();
+            }
+        } catch (e) {
+            handleLogout();
+        }
+    };
+
+    const handleAuth = async (e) => {
+        e.preventDefault();
+        setErrorMsg('');
+        const url = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+
+        // 登入只需帳密，註冊時若 email 欄位空白則自動代入默認值
+        const payload = authMode === 'login'
+            ? { username: usernameInput, password: passwordInput }
+            : { username: usernameInput, email: emailInput || `${usernameInput}@loka.com`, password: passwordInput };
+
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await res.json();
+            if (res.ok) {
+                localStorage.setItem('loka_token', data.access_token);
+                setToken(data.access_token);
+                setUser({ username: data.username, is_premium: data.is_premium });
+                setUsernameInput('');
+                setPasswordInput('');
+                setEmailInput('');
+            } else {
+                setErrorMsg(data.detail || t.errorAuth);
+            }
+        } catch (err) {
+            setErrorMsg(t.errorAuth);
+        }
+    };
+
+    const handleLogout = () => {
+        localStorage.removeItem('loka_token');
+        setToken('');
+        setUser(null);
+        setItinerary(null);
+        setCheckedActivities({});
+        setErrorMsg('');
+    };
+
+    // 升級按鈕觸發：彈出高質感模擬付費 modal
+    const handleUpgrade = () => {
+        setShowPaywall(true);
+    };
+
+    // 模擬金流信用卡授權流程 (畢業專題評審審查重點 - 模擬支付回呼迴路)
+    const handleSimulatePayment = async (e) => {
+        e.preventDefault();
+        setPaymentLoading(true);
+        setErrorMsg('');
+
+        try {
+            // 呼叫後端模擬金流 API，發送刷卡資訊
+            const res = await fetch('/api/payment/simulate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    card_number: cardData.card_number,
+                    expiry: cardData.expiry,
+                    cvv: cardData.cvv
+                })
+            });
+
+            const data = await res.json();
+            if (res.ok) {
+                // 金流成功回呼後，將使用者狀態翻轉為 is_premium = True
+                setUser(prev => ({ ...prev, is_premium: data.is_premium }));
+                setShowPaywall(false);
+                setCardData({ card_number: '', expiry: '', cvv: '' });
+                alert(lang === 'zh-tw' ? '模擬交易成功！您的 LOKA 帳戶已成功解鎖 Premium 尊榮會員資格與匯出工具套件。' : 'Mock transaction successful! Premium privileges unlocked.');
+            } else {
+                alert(data.detail || '模擬金流驗證失敗，信用卡卡號必須為 16 位數字。');
+            }
+        } catch (err) {
+            console.error("Payment error:", err);
+            alert('模擬金流網關連線異常。');
+        } finally {
+            setPaymentLoading(false);
+        }
+    };
+
+    // Premium 鎖定功能 1：匯出高質感 PDF 行程 HTML 下載
+    const handleExportPdf = () => {
+        if (!user.is_premium) {
+            setShowPaywall(true);
+            return;
+        }
+        if (!itinerary) return;
+
+        const dest = itinerary.destination;
+        const title = `${dest} Bespoke Luxury Escape`;
+
+        // 封裝一份包含精美 Print/網頁 CSS 排版的奢華 HTML 檔案，讓使用者可以輕鬆在瀏覽器「另存 PDF」或列印
+        let htmlContent = `
+        <!DOCTYPE html>
+        <html lang="zh-TW">
+        <head>
+            <meta charset="utf-8">
+            <title>${title}</title>
+            <style>
+                body {
+                    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+                    background-color: #FFFFFF;
+                    color: #0A3B2E;
+                    padding: 40px;
+                    margin: 0;
+                }
+                .container {
+                    max-width: 800px;
+                    margin: 0 auto;
+                    border: 2px solid #0A3B2E;
+                    padding: 40px;
+                    border-radius: 16px;
+                }
+                .header-section {
+                    text-align: center;
+                    border-bottom: 2px solid #0A3B2E;
+                    padding-bottom: 20px;
+                    margin-bottom: 30px;
+                }
+                .brand-title {
+                    font-size: 32px;
+                    font-weight: 900;
+                    letter-spacing: 0.15em;
+                    margin: 0 0 5px 0;
+                }
+                .brand-subtitle {
+                    font-size: 10px;
+                    color: #555;
+                    letter-spacing: 0.3em;
+                    font-weight: 600;
+                    margin: 0;
+                    text-transform: uppercase;
+                }
+                .itinerary-title {
+                    font-size: 22px;
+                    font-weight: bold;
+                    margin: 25px 0 10px 0;
+                }
+                .meta {
+                    font-size: 13px;
+                    color: #666;
+                    margin-bottom: 30px;
+                }
+                .logistics-section {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 20px;
+                    margin-bottom: 30px;
+                    padding: 20px;
+                    background-color: #F8FAF9;
+                    border-radius: 12px;
+                }
+                .logistics-card h5 {
+                    margin: 0 0 8px 0;
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+                .logistics-card p {
+                    margin: 0 0 6px 0;
+                    font-size: 12px;
+                    color: #444;
+                }
+                .day-block {
+                    margin-bottom: 35px;
+                    page-break-inside: avoid;
+                }
+                .day-title {
+                    font-size: 16px;
+                    font-weight: bold;
+                    background-color: #0A3B2E;
+                    color: #FFFFFF;
+                    padding: 10px 20px;
+                    border-radius: 8px;
+                    margin-bottom: 20px;
+                    letter-spacing: 0.05em;
+                }
+                .activity-card {
+                    border-left: 4px solid #114D3E;
+                    padding-left: 20px;
+                    margin-bottom: 20px;
+                }
+                .activity-title {
+                    font-weight: bold;
+                    font-size: 15px;
+                    margin-bottom: 6px;
+                }
+                .activity-desc {
+                    font-size: 13px;
+                    color: #444;
+                    line-height: 1.6;
+                }
+                .activity-map {
+                    font-size: 11px;
+                    color: #114D3E;
+                    font-weight: bold;
+                    margin-top: 8px;
+                }
+                .footer {
+                    margin-top: 50px;
+                    border-top: 1px solid #eee;
+                    padding-top: 25px;
+                    text-align: center;
+                    font-size: 10px;
+                    color: #888;
+                    letter-spacing: 0.2em;
+                }
+                @media print {
+                    body { padding: 0; }
+                    .container { border: none; padding: 0; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header-section">
+                    <h1 class="brand-title">LOKA</h1>
+                    <p class="brand-subtitle">Bespoke Tropical Itinerary Designer</p>
+                </div>
+                <div class="itinerary-title">${title}</div>
+                <div class="meta">
+                    <strong>Destination:</strong> ${dest} &bull; 
+                    <strong>Date Range:</strong> ${itinerary.start_date} to ${itinerary.end_date}
+                </div>
+                
+                <div class="logistics-section">
+                    <div class="logistics-card">
+                        <h5>✈️ Flight Logistics</h5>
+                        <p><strong>Carrier:</strong> ${itinerary.flight_logistics?.carrier || "N/A"}</p>
+                        <p><strong>Estimated Cost:</strong> ${itinerary.flight_logistics?.estimated_cost || "N/A"}</p>
+                    </div>
+                    <div class="logistics-card">
+                        <h5>🏨 Hotel Logistics</h5>
+                        <p><strong>Name:</strong> ${itinerary.hotel_logistics?.name || "N/A"}</p>
+                        <p><strong>Description:</strong> ${itinerary.hotel_logistics?.description || "N/A"}</p>
+                    </div>
+                </div>
+        `;
+
+        itinerary.days.forEach(day => {
+            htmlContent += `
+                <div class="day-block">
+                    <div class="day-title">Day ${day.day}</div>
+            `;
+            day.places?.forEach(place => {
+                htmlContent += `
+                    <div class="activity-card">
+                        <div class="activity-title">${place.title}</div>
+                        <div class="activity-desc">${place.description}</div>
+                        <div class="activity-map">📍 Google Maps Query: ${place.maps_search_query}</div>
+                    </div>
+                `;
+            });
+            htmlContent += `</div>`;
+        });
+
+        htmlContent += `
+                <div class="footer">&copy; 2026 LOKA BESPOKE. GENERATED EXCLUSIVELY FOR PREMIUM USERS.</div>
+            </div>
+        </body>
+        </html>
+        `;
+
+        // 使用 Blob 下載 HTML 檔案
+        const blob = new Blob([htmlContent], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `LOKA_Itinerary_${dest.replace(/\s+/g, '_')}.html`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showToast(t.pdfDownloaded);
+    };
+
+    // Premium 鎖定功能 2：複製專為 Notion 優化的 Markdown 格式區塊
+    const handleCopyNotion = () => {
+        if (!user.is_premium) {
+            setShowPaywall(true);
+            return;
+        }
+        if (!itinerary) return;
+
+        const dest = itinerary.destination;
+        let md = `## 🗺️ **${dest} Bespoke Luxury Escape**\n`;
+        md += `> **目的地:** \`${dest}\` | **旅行日期:** \`${itinerary.start_date} 至 ${itinerary.end_date}\`\n\n`;
+
+        md += `### 🛩️ **Logistics Matrix / 交通與住宿**\n`;
+        md += `- **✈️ 航班規劃:** ${itinerary.flight_logistics?.carrier || "N/A"} (估算花費: \`${itinerary.flight_logistics?.estimated_cost || "N/A"}\`)\n`;
+        md += `- **🏨 飯店住宿:** ${itinerary.hotel_logistics?.name || "N/A"} - *${itinerary.hotel_logistics?.description || "N/A"}*\n\n`;
+
+        itinerary.days.forEach(day => {
+            md += `### 📅 **第 ${day.day} 天**\n`;
+            day.places?.forEach((place, idx) => {
+                md += `- [ ] **${place.title}**\n`;
+                md += `  - *介紹:* ${place.description}\n`;
+                md += `  - *Google 地圖查詢:* \`${place.maps_search_query}\` *(D${day.day}-${idx + 1})*\n`;
+            });
+            md += `\n`;
+        });
+
+        md += `--- \n*Generated exclusively by LOKA Bespoke Luxury Travel Planner*`;
+
+        navigator.clipboard.writeText(md).then(() => {
+            showToast(t.notionCopied);
+        }).catch(err => {
+            console.error("Notion Copy Error:", err);
+            alert("複製失敗，請手動選取複製。");
+        });
+    };
+
+    // 一鍵儲存行程到雲端資料庫
+    const handleSaveItinerary = async () => {
+        if (!user) return;
+        if (!itinerary) return;
+        try {
+            const res = await fetch('/api/trips/save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    trip_title: itinerary.title || `${itinerary.destination} Bespoke Escape`,
+                    itinerary_data: itinerary
+                })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                showToast(lang === 'en' ? "Trip saved successfully!" : "行程已成功儲存至雲端！");
+            } else {
+                alert(data.detail || "儲存失敗");
+            }
+        } catch (err) {
+            console.error("Save itinerary error:", err);
+            alert("儲存失敗，請重試");
+        }
+    };
+
+    // 顯示全域 Toast 微動畫提示
+    const showToast = (message) => {
+        setToastMessage(message);
+        setTimeout(() => {
+            setToastMessage('');
+        }, 3000);
+    };
+
+    // 處理行程生成：將 Wanderlog 的輸入組合為語意化的 Prompt 呼叫 AI
+    const handleGenerate = async (e) => {
+        e.preventDefault();
+        if (!destination.trim() || !startDate || !endDate) return;
+        setLoading(true);
+        setErrorMsg('');
+
+        // 在 handleGenerate 中，截獲有效負載參數以計算天數區間
+        const computedDays = Math.max(1, Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24))) + 1;
+
+        // 組裝目的地、人數、度假天數與開始/結束日期，結構化給予 AI
+        const prompt = `Create a bespoke travel itinerary in ${destination} starting from ${startDate} to ${endDate} for ${peopleCount} travelers (total duration ${computedDays} days). Ensure a luxurious layout.`;
+
+        try {
+            const res = await fetch('/api/generate-itinerary', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ prompt: prompt })
+            });
+
+            const data = await res.json();
+            if (res.ok) {
+                setItinerary(data);
+                setCheckedActivities({});
+            } else {
+                setErrorMsg(data.detail || t.errorGen);
+            }
+        } catch (err) {
+            setErrorMsg(t.errorGen);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // 一鍵載入巴里島展示行程 (並同步變更輸入欄位數值以求統一)
+    const handleLoadDemo = () => {
+        setDestination('Bali');
+        setPeopleCount(2);
+        setStartDate('2026-07-01');
+        setEndDate('2026-07-03');
+        setItinerary(defaultBaliItinerary);
+        setCheckedActivities({});
+    };
+
+    const toggleActivityCheck = (dayNum, actIdx) => {
+        const key = `${dayNum}-${actIdx}`;
+        setCheckedActivities(prev => ({
+            ...prev,
+            [key]: !prev[key]
+        }));
+    };
+
+    // ---------------------------------------------------------------------------
+    // 未登入介面 (毛玻璃奢華登入框)
+    // ---------------------------------------------------------------------------
+    if (!user) {
+        return (
+            <div className="min-h-screen w-full flex flex-col justify-between p-6 bg-[#0A3B2E] transition-all duration-500">
+                {/* 語言切換按鈕 */}
+                <div className="flex justify-end">
+                    <button
+                        onClick={() => setLang(lang === 'en' ? 'zh-tw' : 'en')}
+                        className="px-4 py-1.5 rounded-full border border-white/20 text-xs font-semibold hover:bg-white/10 active:scale-95 transition-all text-white"
+                    >
+                        {lang === 'en' ? '繁體中文 (ZH-TW)' : 'English (EN)'}
+                    </button>
+                </div>
+
+                {/* 居中登入框 */}
+                <div className="flex-grow flex items-center justify-center">
+                    <div className="w-full max-w-md bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl rounded-2xl p-8 transform scale-100 hover:scale-[1.01] transition-transform duration-300">
+                        {/* 奢華品牌 LOGO */}
+                        <div className="text-center mb-8">
+                            <h1 className="text-8xl font-black mb-4 tracking-[0.2em] text-white">LOKA</h1>
+                            <p className="text-base font-medium tracking-wide text-white/70 italic">Helping you uncover the beauty of the world.</p>
+                        </div>
+
+                        {errorMsg && (
+                            <div className="mb-4 p-3 rounded-lg bg-red-950/40 border border-red-500/20 text-red-200 text-xs text-center">
+                                {errorMsg}
+                            </div>
+                        )}
+
+                        <form onSubmit={handleAuth} className="space-y-6">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-white/70 mb-2">{t.usernameLabel}</label>
+                                <input
+                                    type="text"
+                                    required
+                                    placeholder={t.usernamePlaceholder}
+                                    value={usernameInput}
+                                    onChange={(e) => setUsernameInput(e.target.value)}
+                                    className="w-full bg-white/5 border border-white/10 text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all placeholder-white/30"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-white/70 mb-2">{t.passwordLabel}</label>
+                                <input
+                                    type="password"
+                                    required
+                                    placeholder={t.passwordPlaceholder}
+                                    value={passwordInput}
+                                    onChange={(e) => setPasswordInput(e.target.value)}
+                                    className="w-full bg-white/5 border border-white/10 text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all placeholder-white/30"
+                                />
+                            </div>
+
+                            {authMode === 'register' && (
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-white/70 mb-2">Email</label>
+                                    <input
+                                        type="email"
+                                        required
+                                        placeholder="Enter your email address"
+                                        value={emailInput}
+                                        onChange={(e) => setEmailInput(e.target.value)}
+                                        className="w-full bg-white/5 border border-white/10 text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all placeholder-white/30"
+                                    />
+                                </div>
+                            )}
+
+                            <button
+                                type="submit"
+                                className="w-full py-3 bg-white text-[#0A3B2E] font-bold rounded-xl shadow-lg hover:bg-[#E2F1ED] active:scale-[0.98] transition-all duration-200"
+                            >
+                                {authMode === 'login' ? t.login : t.register}
+                            </button>
+                        </form>
+
+                        <div className="mt-6 text-center">
+                            <button
+                                onClick={() => {
+                                    setAuthMode(authMode === 'login' ? 'register' : 'login');
+                                    setErrorMsg('');
+                                }}
+                                className="text-xs text-white/60 hover:text-white transition-colors"
+                            >
+                                {authMode === 'login' ? t.dontHaveAccount : t.alreadyHaveAccount}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 頁尾版權 */}
+                <div className="text-center text-white/20 text-[10px] tracking-widest uppercase">
+                    &copy; 2026 LOKA BESPOKE. All rights reserved.
+                </div>
+            </div>
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // 登入後主介面 (雙欄奢華工作台)
+    // ---------------------------------------------------------------------------
+    return (
+        <div className="h-screen w-screen overflow-hidden flex flex-col bg-[#0A3B2E]">
+            {/* 頂部導航列 (Navbar) */}
+            <header className="h-20 border-b border-white/10 flex items-center justify-between px-6 bg-[#0A3B2E]/50 backdrop-blur-md z-50">
+                <div className="flex items-center gap-4">
+                    <h2 className="text-4xl font-black tracking-[0.2em] text-white">{t.appName}</h2>
+                    <span className="text-[10px] border border-white/20 px-2.5 py-0.5 rounded text-white/60 tracking-wider font-semibold">
+                        {t.appSubtitle}
+                    </span>
+                </div>
+
+                <div className="flex items-center gap-4 text-white">
+                    {/* 使用者歡迎詞與會員標籤 */}
+                    <div className="text-right">
+                        <div className="text-xs text-white/70">
+                            {t.welcome} <span className="font-bold text-white">{user.username}</span>
+                        </div>
+                        {user.is_premium ? (
+                            <span className="inline-block text-[8px] bg-white text-[#0A3B2E] font-black px-1.5 py-0.5 rounded mt-0.5">
+                                {t.premiumBadge}
+                            </span>
+                        ) : (
+                            <button
+                                onClick={handleUpgrade}
+                                className="text-[9px] text-white/95 border border-white/30 hover:border-white hover:bg-white/10 px-2 py-0.5 rounded mt-0.5 transition-all"
+                            >
+                                {t.upgradeToPremium}
+                            </button>
+                        )}
+                    </div>
+
+                    {/* 語言切換 */}
+                    <button
+                        onClick={() => setLang(lang === 'en' ? 'zh-tw' : 'en')}
+                        className="p-2 hover:bg-white/10 rounded-lg text-xs font-semibold transition-colors"
+                    >
+                        {lang === 'en' ? '繁中' : 'EN'}
+                    </button>
+
+                    {/* 登出按鈕 */}
+                    <button
+                        onClick={handleLogout}
+                        className="px-3 py-1.5 bg-white/5 border border-white/10 hover:bg-white/10 text-white text-xs font-semibold rounded-lg transition-colors"
+                    >
+                        {t.logout}
+                    </button>
+                </div>
+            </header>
+
+            {/* 雙欄主版面配置：實現 50/50 比例水平分割，完美對稱 */}
+            <main className="flex-grow flex overflow-hidden p-6 gap-6 bg-[#0A3B2E]">
+                {/* 左側面板：Wanderlog 輸入區與打卡 Timeline 清單 (佔用 50% 寬度，卡片容器化) */}
+                <div className="w-1/2 bg-[#114D3E]/20 border border-white/10 rounded-2xl flex flex-col overflow-hidden backdrop-blur-sm">
+
+                    {/* AI 行程輸入生成區 (Wanderlog 靈感，高對比白框格線深綠底) */}
+                    <div className="p-6 border-b border-white/10 bg-[#0A3B2E]/40">
+                        <form onSubmit={handleGenerate} className="space-y-4 bg-white shadow-xl border border-gray-100 rounded-2xl p-6 text-slate-800">
+                            {/* 1. Where to go? */}
+                            <div className="flex flex-col gap-1.5 pb-2 border-b border-gray-100">
+                                <label className="text-slate-800 text-[10px] font-extrabold uppercase tracking-wider">{t.destLabel}</label>
+                                <input
+                                    type="text"
+                                    required
+                                    value={destination}
+                                    onChange={(e) => setDestination(e.target.value)}
+                                    placeholder="e.g. Bali, Ubud, Seminyak"
+                                    className="w-full bg-gray-50 border border-gray-200 text-slate-900 text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:bg-white focus:border-gray-300 transition-all font-bold placeholder-slate-400"
+                                />
+                            </div>
+
+                            {/* 2. How many people? */}
+                            <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                                <div className="flex flex-col gap-0.5">
+                                    <label className="text-slate-800 text-[10px] font-extrabold uppercase tracking-wider">{t.peopleLabel}</label>
+                                    <span className="text-slate-500 text-[9px] font-medium">Bespoke traveler count</span>
+                                </div>
+                                <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden bg-gray-50">
+                                    <button
+                                        type="button"
+                                        onClick={() => setPeopleCount(prev => Math.max(1, prev - 1))}
+                                        className="px-2.5 py-1 text-slate-800 hover:bg-gray-100 font-black transition-all text-xs"
+                                    >-</button>
+                                    <span className="px-3 text-slate-900 font-extrabold text-xs min-w-[20px] text-center">{peopleCount}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setPeopleCount(prev => prev + 1)}
+                                        className="px-2.5 py-1 text-slate-800 hover:bg-gray-100 font-black transition-all text-xs"
+                                    >+</button>
+                                </div>
+                            </div>
+
+                            {/* 3. Wanderlog 日曆選擇區 */}
+                            <div className="flex flex-col gap-2 pt-2">
+                                <div className="flex flex-col gap-0.5">
+                                    <label className="text-slate-800 text-[10px] font-extrabold uppercase tracking-wider">{t.durationLabel}</label>
+                                    <span className="text-slate-500 text-[9px] font-medium">Wanderlog calendar range</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div className="flex flex-col gap-1">
+                                        <span className="text-slate-500 text-[9px] font-bold">{t.startDateLabel}</span>
+                                        <input
+                                            type="date"
+                                            required
+                                            value={startDate}
+                                            onChange={(e) => setStartDate(e.target.value)}
+                                            className="border border-gray-200 text-gray-900 bg-gray-50 focus:bg-white rounded-lg px-2.5 py-1.5 text-xs font-bold focus:outline-none transition-all w-full"
+                                        />
+                                    </div>
+                                    <div className="flex flex-col gap-1">
+                                        <span className="text-slate-500 text-[9px] font-bold">{t.endDateLabel}</span>
+                                        <input
+                                            type="date"
+                                            required
+                                            value={endDate}
+                                            onChange={(e) => setEndDate(e.target.value)}
+                                            className="border border-gray-200 text-gray-900 bg-gray-50 focus:bg-white rounded-lg px-2.5 py-1.5 text-xs font-bold focus:outline-none transition-all w-full"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 按鈕組 */}
+                            <div className="flex gap-2 pt-4">
+                                <button
+                                    type="submit"
+                                    disabled={loading}
+                                    className="flex-grow py-2.5 bg-[#0A3B2E] hover:bg-[#114D3E] text-white text-xs font-black rounded-lg active:scale-[0.97] transition-all disabled:opacity-50 flex items-center justify-center gap-2 uppercase tracking-wider shadow-md"
+                                >
+                                    {loading ? (
+                                        <>
+                                            <svg className="animate-spin h-3.5 w-3.5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4}></circle>
+                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                            </svg>
+                                            <span>{t.generating}</span>
+                                        </>
+                                    ) : t.generateBtn}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={handleLoadDemo}
+                                    className="px-3.5 bg-gray-100 hover:bg-gray-200 text-slate-800 text-xs font-bold rounded-lg border border-gray-200 active:scale-[0.97] transition-all"
+                                >
+                                    {t.loadDemoBtn}
+                                </button>
+                            </div>
+                        </form>
+
+                        {errorMsg && (
+                            <div className="mt-3 p-2.5 bg-red-950/40 border border-red-500/20 rounded-lg text-red-200 text-[10px] text-center">
+                                {errorMsg}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* 行程 Timeline checklist 滾動顯示區 */}
+                    <div className="flex-grow overflow-y-auto p-6 space-y-6">
+
+                        <h3 className="text-sm font-extrabold tracking-wider text-white/90 uppercase mb-4">
+                            {t.checklistTitle}
+                        </h3>
+
+                        {!itinerary ? (
+                            <div className="h-48 flex items-center justify-center text-center p-4">
+                                <p className="text-white/40 text-xs leading-relaxed max-w-[280px]">
+                                    {t.noItinerary}
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="relative pl-4 border-l border-white/10 space-y-6">
+                                {/* 顯示行程主標題 (白底精緻印刷雜誌風卡片) */}
+                                <div className="mb-6 bg-white shadow-xl border border-gray-100 rounded-2xl p-5 text-slate-800">
+                                    <h4 className="text-lg font-black text-slate-900 tracking-wide uppercase">
+                                        🗺️ {itinerary.destination} BESPOKE ESCAPE
+                                    </h4>
+                                    <p className="text-xs text-slate-500 mt-1 font-semibold">
+                                        📅 {itinerary.start_date} &mdash; {itinerary.end_date}
+                                    </p>
+                                </div>
+
+                                {/* 🛩️ Logistics Matrix 列 */}
+                                <div className="grid grid-cols-2 gap-4 mb-6">
+                                    {/* Flight Card */}
+                                    <div className="bg-white shadow-xl border border-gray-100 rounded-2xl p-4 text-slate-800 flex flex-col justify-between transition-all duration-200 hover:shadow-md">
+                                        <div>
+                                            <div className="flex items-center gap-1.5 mb-2">
+                                                <span className="text-lg">✈️</span>
+                                                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Flight Logistics</span>
+                                            </div>
+                                            <h5 className="text-xs font-black text-slate-900 mb-1 leading-snug">{itinerary.flight_logistics?.carrier || "Luxury Airline"}</h5>
+                                            <p className="text-[10px] text-slate-600 font-medium mb-3">Est. Cost: {itinerary.flight_logistics?.estimated_cost}</p>
+                                        </div>
+                                        <a
+                                            href={itinerary.flight_logistics?.booking_url || ('https://www.tiket.com/pesawat/search?q=' + (itinerary.flight_logistics?.booking_search_query || ''))}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="w-full py-2 bg-[#0A3B2E] hover:bg-[#114D3E] text-white text-[10px] font-bold rounded-lg text-center transition-all duration-200 flex items-center justify-center gap-1 hover:shadow-md"
+                                        >
+                                            🎟️ Book on tiket.com
+                                        </a>
+                                    </div>
+
+                                    {/* Hotel Card */}
+                                    <div className="bg-white shadow-xl border border-gray-100 rounded-2xl p-4 text-slate-800 flex flex-col justify-between transition-all duration-200 hover:shadow-md">
+                                        <div>
+                                            <div className="flex items-center gap-1.5 mb-2">
+                                                <span className="text-lg">🏨</span>
+                                                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Hotel Logistics</span>
+                                            </div>
+                                            <h5 className="text-xs font-black text-slate-900 mb-1 leading-snug">{itinerary.hotel_logistics?.name || "Luxury Resort"}</h5>
+                                            <p className="text-[10px] text-slate-600 leading-relaxed mb-3 line-clamp-2">{itinerary.hotel_logistics?.description}</p>
+                                        </div>
+                                        <div className="flex flex-col gap-1.5">
+                                            <button
+                                                onClick={() => {
+                                                    if (itinerary.hotel_logistics?.latitude && itinerary.hotel_logistics?.longitude) {
+                                                        setFocusedCoords([itinerary.hotel_logistics.latitude, itinerary.hotel_logistics.longitude]);
+                                                    }
+                                                }}
+                                                className="w-full py-1.5 border border-[#0A3B2E] text-[#0A3B2E] hover:bg-gray-50 text-[9px] font-bold rounded-lg transition-all duration-200"
+                                            >
+                                                📍 Show on Map
+                                            </button>
+                                            <a
+                                                href={itinerary.hotel_logistics?.booking_url || ('https://www.tiket.com/hotel/search?q=' + (itinerary.hotel_logistics?.booking_search_query || ''))}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="w-full py-2 bg-[#0A3B2E] hover:bg-[#114D3E] text-white text-[10px] font-bold rounded-lg text-center transition-all duration-200 flex items-center justify-center gap-1 hover:shadow-md"
+                                            >
+                                                🏨 Reserve on tiket.com
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {itinerary.days.map((day) => (
+                                    <div key={day.day} className="relative space-y-3">
+                                        {/* 日期與主題標題 */}
+                                        <div className="flex items-center gap-2 -ml-[25px]">
+                                            <span className="w-4 h-4 rounded-full bg-white flex items-center justify-center ring-4 ring-[#0A3B2E]">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-[#0A3B2E]"></span>
+                                            </span>
+                                            <h5 className="text-xs font-black bg-white/10 px-2.5 py-1 rounded text-white tracking-wider">
+                                                {t.day} {day.day}
+                                            </h5>
+                                        </div>
+
+                                        {/* 活動打卡清單 */}
+                                        <div className="h-auto w-full min-h-[500px] grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                            {day.places?.map((place, idx) => {
+                                                const checkedKey = `${day.day}-${idx}`;
+                                                const isChecked = !!checkedActivities[checkedKey];
+
+                                                return (
+                                                    <div
+                                                        key={idx}
+                                                        onClick={() => setFocusedCoords([place.latitude, place.longitude])}
+                                                        className={`rounded-xl border cursor-pointer select-none transition-all duration-200 overflow-hidden ${isChecked
+                                                            ? 'bg-gray-50 border-gray-200 opacity-50 text-slate-400'
+                                                            : 'bg-white hover:shadow-lg border-gray-100 shadow-md text-slate-800'
+                                                            }`}
+                                                    >
+                                                        {/* 卡片頂部 Unsplash 圖片 (含優雅的後備載入機制) */}
+                                                         <GracefulImage
+                                                             src={place.image_url}
+                                                             alt={place.title}
+                                                             title={place.title}
+                                                         />
+
+                                                         <div className="p-4">
+                                                             <div className="flex items-start gap-3">
+                                                                 {/* 客製化 Checkbox */}
+                                                                 <div className="mt-0.5" onClick={(e) => {
+                                                                     e.stopPropagation();
+                                                                     toggleActivityCheck(day.day, idx);
+                                                                 }}>
+                                                                     <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${isChecked
+                                                                         ? 'bg-[#0A3B2E] border-[#0A3B2E]'
+                                                                         : 'border-gray-300 bg-white'
+                                                                         }`}>
+                                                                         {isChecked && (
+                                                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 text-white" viewBox="0 0 20 20" fill="currentColor">
+                                                                                 <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                                                             </svg>
+                                                                         )}
+                                                                     </div>
+                                                                 </div>
+
+                                                                 {/* 景點資訊 */}
+                                                                 <div className="flex-grow">
+                                                                     <h6 className={`text-xs font-extrabold text-slate-900 transition-all ${isChecked ? 'line-through text-slate-400' : ''}`}>
+                                                                         {place.title}
+                                                                     </h6>
+                                                                     <p className={`text-[10px] text-slate-500 leading-relaxed mt-1.5 transition-all ${isChecked ? 'line-through text-slate-300' : ''}`}>
+                                                                         {place.description}
+                                                                     </p>
+                                                                     
+                                                                     {/* 底部按鈕區 */}
+                                                                     <div className="mt-3 flex items-center justify-between">
+                                                                         <span className="text-slate-400 text-[9px] font-bold">D{day.day}-{idx + 1}</span>
+                                                                         <a
+                                                                             href={'https://www.google.com/maps/search/?api=1&query=' + place.maps_search_query}
+                                                                             target="_blank"
+                                                                             rel="noopener noreferrer"
+                                                                             onClick={(e) => e.stopPropagation()}
+                                                                             className="inline-flex items-center gap-1 py-1.5 px-3 bg-[#0A3B2E] hover:bg-[#114D3E] text-white rounded-lg text-[9px] font-bold transition-all duration-200 hover:shadow-md active:scale-95"
+                                                                         >
+                                                                             📍 View in Google Maps
+                                                                         </a>
+                                                                     </div>
+                                                                 </div>
+                                                             </div>
+                                                         </div>
+                                                     </div>
+                                                 );
+                                             })}
+                                         </div>
+                                     </div>
+                                 ))}
+                            </div>
+                        )}
+
+                        {/* Timeline 下方的 Premium 行動按鈕區 */}
+                        {itinerary && (
+                            user.is_premium ? (
+                                <div className="mt-6 p-4 rounded-2xl bg-[#114D3E]/40 border border-white/20 shadow-lg space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="text-[10px] font-black tracking-widest text-[#E2F1ED] uppercase flex items-center gap-1.5">
+                                            💎 {t.paymentTitle}
+                                        </h4>
+                                        <span className="text-[8px] bg-white/20 text-white font-extrabold px-1.5 py-0.5 rounded tracking-wider">
+                                            UNLOCKED
+                                        </span>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <button
+                                            onClick={handleExportPdf}
+                                            className="py-2.5 px-3 bg-white text-[#0A3B2E] hover:bg-[#E2F1ED] font-bold text-xs rounded-xl shadow transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                                        >
+                                            <span>{t.exportPdfBtn}</span>
+                                        </button>
+                                        <button
+                                            onClick={handleCopyNotion}
+                                            className="py-2.5 px-3 bg-[#114D3E] hover:bg-[#114D3E]/80 text-white font-bold text-xs rounded-xl border border-white/20 transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                                        >
+                                            <span>{t.copyNotionBtn}</span>
+                                        </button>
+                                        <button
+                                            onClick={handleSaveItinerary}
+                                            className="py-2.5 px-3 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl border border-white/20 transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                                        >
+                                            <span>{t.saveTripBtn}</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="mt-6">
+                                    <button
+                                        onClick={() => setShowPaywall(true)}
+                                        className="w-full py-3 bg-gradient-to-r from-amber-500 via-amber-600 to-yellow-600 hover:from-amber-600 hover:to-yellow-700 text-white font-black text-xs rounded-xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 tracking-wider uppercase border border-white/20"
+                                    >
+                                        <span>🔒 Export to Notion / PDF Handout</span>
+                                    </button>
+                                </div>
+                            )
+                        )}
+                    </div>
+                </div>
+
+                {/* 右側面板：地圖展示與導航 (佔用 50% 寬度，卡片容器化) */}
+                <div className="w-1/2 h-full flex flex-col overflow-hidden">
+                    {/* 安全檢測防護：當 window.MapComponent 載入完成後才進行渲染 */}
+                    {mapLoaded && window.MapComponent ? (
+                        <window.MapComponent
+                            itinerary={itinerary}
+                            lang={lang}
+                            focusedCoords={focusedCoords}
+                        />
+                    ) : (
+                        <div className="w-full h-full flex items-center justify-center text-xs text-white/40 border border-white/10 rounded-2xl bg-[#114D3E]/20">
+                            <span className="animate-pulse">Loading Luxury Map Canvas...</span>
+                        </div>
+                    )}
+                </div>
+            </main>
+
+            {/* 奢華透明毛玻璃付費 Modal overlay (模擬金流支付介面) */}
+            {showPaywall && (
+                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 backdrop-blur-md p-4">
+                    <div className="w-full max-w-md bg-[#0A3B2E]/60 backdrop-blur-xl border border-white/20 shadow-2xl rounded-3xl p-8 relative transform scale-100 transition-all duration-300">
+                        {/* 關閉按鈕 */}
+                        <button
+                            onClick={() => setShowPaywall(false)}
+                            className="absolute top-4 right-4 w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 border border-white/15 flex items-center justify-center text-white/70 hover:text-white transition-all text-xs"
+                        >
+                            ✕
+                        </button>
+
+                        {/* 鎖頭 icon */}
+                        <div className="w-14 h-14 mx-auto mb-5 bg-white/10 border border-white/20 rounded-full flex items-center justify-center shadow-inner">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                            </svg>
+                        </div>
+
+                        <h3 className="text-xl font-black text-white text-center mb-2 tracking-wide uppercase">{t.paymentTitle}</h3>
+                        <p className="text-white/60 text-xs text-center mb-6 leading-relaxed">
+                            {t.paymentDesc}
+                        </p>
+
+                        <form onSubmit={handleSimulatePayment} className="space-y-4">
+                            <div>
+                                <label className="block text-[9px] font-bold uppercase tracking-wider text-white/70 mb-1.5">{t.cardNumberLabel}</label>
+                                <input
+                                    type="text"
+                                    required
+                                    maxLength="19"
+                                    placeholder="4111 2222 3333 4444"
+                                    value={cardData.card_number}
+                                    onChange={(e) => {
+                                        let val = e.target.value.replace(/\D/g, '');
+                                        let formatted = val.match(/.{1,4}/g)?.join(' ') || val;
+                                        setCardData(prev => ({ ...prev, card_number: formatted }));
+                                    }}
+                                    className="w-full bg-white/5 border border-white/20 text-white rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-white/20 focus:bg-white/10 transition-all placeholder-white/20"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-[9px] font-bold uppercase tracking-wider text-white/70 mb-1.5">{t.expiryLabel}</label>
+                                    <input
+                                        type="text"
+                                        required
+                                        maxLength="5"
+                                        placeholder="12/28"
+                                        value={cardData.expiry}
+                                        onChange={(e) => {
+                                            let val = e.target.value.replace(/\D/g, '');
+                                            if (val.length > 2) {
+                                                val = val.substring(0, 2) + '/' + val.substring(2, 4);
+                                            }
+                                            setCardData(prev => ({ ...prev, expiry: val }));
+                                        }}
+                                        className="w-full bg-white/5 border border-white/20 text-white rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-white/20 focus:bg-white/10 transition-all placeholder-white/20 text-center"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-[9px] font-bold uppercase tracking-wider text-white/70 mb-1.5">{t.cvvLabel}</label>
+                                    <input
+                                        type="password"
+                                        required
+                                        maxLength="3"
+                                        placeholder="***"
+                                        value={cardData.cvv}
+                                        onChange={(e) => setCardData(prev => ({ ...prev, cvv: e.target.value.replace(/\D/g, '') }))}
+                                        className="w-full bg-white/5 border border-white/20 text-white rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-white/20 focus:bg-white/10 transition-all placeholder-white/20 text-center"
+                                    />
+                                </div>
+                            </div>
+
+                            <button
+                                type="submit"
+                                disabled={paymentLoading}
+                                className="w-full py-3 bg-white text-[#0A3B2E] font-bold rounded-xl shadow-lg hover:bg-[#E2F1ED] active:scale-95 transition-all duration-200 mt-2 text-xs flex items-center justify-center gap-2"
+                            >
+                                {paymentLoading ? (
+                                    <>
+                                        <svg className="animate-spin h-3.5 w-3.5 text-[#0A3B2E]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4}></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        <span>{t.processingPay}</span>
+                                    </>
+                                ) : t.simulatePayBtn}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* 奢華 Toast 微動畫提示 */}
+            {toastMessage && (
+                <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-[10001] bg-white text-[#0A3B2E] border border-white/20 px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 font-bold text-xs animate-bounce">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    {toastMessage}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// 掛載並啟動 React App
+const rootInstance = ReactDOM.createRoot(document.getElementById('root'));
+rootInstance.render(<App />);
+
+</file>
+
+<file path="index.html">
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LOKA | Bespoke Luxury Travel Planner</title>
+    <meta name="description" content="LOKA 是一款超輕量奢華風格旅行規劃助手，結合 AI 提供巴里島行程與真實道路導航規劃。">
+
+    <!-- 引入高質感 Google Font (Outfit) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- 引入 Leaflet CSS (本地伺服) -->
+    <link rel="stylesheet" href="/static/leaflet.css" />
+
+    <!-- 引入 React 與 ReactDOM (本地伺服) -->
+    <script src="/static/react.development.js"></script>
+    <script src="/static/react-dom.development.js"></script>
+
+    <!-- 引入 Babel Standalone 以在瀏覽器中即時解析 JSX (本地伺服) -->
+    <script src="/static/babel.min.js"></script>
+
+    <!-- 引入 Tailwind CSS (本地伺服) 並設定深綠白奢華主題 -->
+    <script src="/static/tailwind.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        loka: {
+                            bg: '#0A3B2E',       // 奢華深綠底色
+                            accent: '#FFFFFF',   // 純白設計線條/文字
+                            tint: '#114D3E',     // 稍微亮一點的深綠容器
+                            light: '#E2F1ED',    // 淺綠白相間
+                            border: 'rgba(255,255,255,0.15)'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Leaflet JS (本地伺服) -->
+    <script src="/static/leaflet.js"></script>
+
+    <style>
+        /* 全域樣式微調 */
+        body {
+            background-color: #0A3B2E;
+            color: #FFFFFF;
+            font-family: 'Outfit', sans-serif;
+            overflow-x: hidden;
+        }
+
+        /* 滾動條美化 */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        /* 移除 Leaflet 預設的一些邊框與字體，統一奢華風格 */
+        .leaflet-container {
+            font-family: 'Outfit', sans-serif !important;
+            background: #0A3B2E !important;
+        }
+    </style>
+</head>
+
+<body class="h-screen w-screen overflow-hidden flex flex-col">
+    <!-- 全域錯誤與協定檢測 -->
+    <script>
+        // 渲染診斷訊息的通用函式
+        function showError(title, htmlContent) {
+            const root = document.getElementById('root');
+            if (root) {
+                // 若已渲染過同類型的錯誤，則避免重複添加
+                if (root.innerHTML.indexOf(title) !== -1) return;
+
+                root.innerHTML = `
+                    <div style="padding: 24px; background: rgba(20, 5, 5, 0.7); backdrop-filter: blur(16px); border: 1px solid rgba(255, 100, 100, 0.3); color: #ffcccc; font-family: 'Outfit', sans-serif; border-radius: 16px; margin: 40px auto; max-width: 800px; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.7); line-height: 1.6;">
+                        <h3 style="margin-top: 0; color: #ff5555; font-size: 18px; font-weight: bold; border-bottom: 1px solid rgba(255,100,100,0.2); padding-bottom: 8px; letter-spacing: 0.05em;">[LOKA System Diagnostic]</h3>
+                        <h4 style="margin: 12px 0; font-size: 14px; font-weight: bold; color: #ff8888;">${title}</h4>
+                        <div style="margin: 12px 0; font-size: 13px;">${htmlContent}</div>
+                        <div style="margin-top: 20px; font-size: 11px; color: rgba(255,255,255,0.4); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px;">
+                            提示：請確保您的筆電已連上網路，且您是透過 <strong>http://127.0.0.1:8000</strong> 造訪網頁。若問題持續存在，請嘗試更換 DNS（如 8.8.8.8）或重啟本地後端服務。
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        // 1. 監聽資源載入錯誤（如 CDN、JS 或 CSS 404 等，需設定 capture = true）
+        window.addEventListener('error', function (event) {
+            // 🛑 PREVENT CRASH BYPASS: Ignore image loading failures
+            if (event.target && event.target.tagName === 'IMG') {
+                console.warn("[LOKA Engine Auto-Filter] Bypassed non-JS asset layout resource rejection error:", event.target.src);
+                return; // Exit silently so it does not destroy your dashboard display
+            }
+
+            // 資源載入失敗 (e.g. SCRIPT 或 LINK 404)
+            if (event.target && (event.target.tagName === 'SCRIPT' || event.target.tagName === 'LINK')) {
+                const url = event.target.src || event.target.href;
+                showError(
+                    "資源載入失敗 (CDN 站點或本地檔案可能無法存取)",
+                    `無法順利載入資源：<span style="color: #ffaa66; font-family: monospace; word-break: break-all;">${url}</span><br>這通常是因為網路連線異常，或 CDN 服務商的連線被阻擋或發生逾時。`
+                );
+            } else {
+                // 一般 JavaScript 執行期錯誤
+                const errorMsg = event.message || (event.error ? event.error.message : 'Unknown Runtime Evaluation Exception');
+                const sourceFile = event.filename || (event.error && event.error.fileName ? event.error.fileName : 'Dynamic Standalone Script Asset');
+                const lineNo = event.lineno !== undefined ? event.lineno : 'N/A';
+                const colNo = event.colno !== undefined ? event.colno : 'N/A';
+
+                showError(
+                    "JavaScript 執行期異常",
+                    `<strong>Error Message:</strong> <span style="color: #ff8888; font-family: monospace;">${errorMsg}</span><br>` +
+                    `<strong>Source Script File:</strong> <span style="color: #ffaa66; font-family: monospace;">${sourceFile}</span><br>` +
+                    `<strong>Position Matrix:</strong> Line ${lineNo}, Col ${colNo}`
+                );
+            }
+        }, true); // 使用 capture 階段以攔截無法冒泡的資源載入錯誤
+
+        // 2. 監聽未處理的 Promise 拒絕（用於捕捉 Babel 轉譯非同步錯誤）
+        window.addEventListener('unhandledrejection', function (event) {
+            const reasonMsg = event.reason ? (event.reason.message || event.reason) : '未知錯誤原因';
+            const stackTrace = event.reason && event.reason.stack ? event.reason.stack : '無堆疊追蹤資訊';
+            showError(
+                "未處理的 Promise 拒絕 (可能是 Babel 編譯錯誤或網路 API 請求失敗)",
+                `<strong>原因：</strong> ${reasonMsg}<br>
+                 <strong>詳細資訊：</strong><pre style="font-size: 11px; margin-top: 5px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; overflow-x: auto; color: #ffaacc; font-family: monospace; border: 1px solid rgba(255,255,255,0.05);">${stackTrace}</pre>`
+            );
+        });
+
+        // 3. 頁面載入後，定時檢查 React 等關鍵全域變數是否正常存在
+        window.addEventListener('load', function () {
+            setTimeout(function () {
+                if (typeof React === 'undefined' || typeof ReactDOM === 'undefined') {
+                    showError(
+                        "React 核心庫缺失",
+                        "無法從網路載入 React 或 ReactDOM。請檢查您的網路連線是否正常，或是重整頁面以重新嘗試載入。"
+                    );
+                } else if (typeof Babel === 'undefined') {
+                    showError(
+                        "Babel 轉譯器缺失",
+                        "無法從網路載入 Babel Standalone。瀏覽器將無法即時解析 JSX 程式碼，導致元件無法正常渲染。"
+                    );
+                }
+            }, 3000); // 載入完成 3 秒後自動執行健診
+        });
+
+        if (window.location.protocol === 'file:') {
+            alert('【LOKA 系統提示】\n偵測到您直接以檔案路徑 (file://) 開啟 HTML 檔案。\n\n由於瀏覽器的同源安全政策 (CORS) 限制，直接開啟時 Babel 將無法載入外部的 JSX 元件。請務必在終端機啟動後端服務，並使用瀏覽器造訪 http://127.0.0.1:8000 進行體驗！');
+        }
+    </script>
+
+    <!-- React 掛載點 -->
+    <div id="root" class="flex-grow flex flex-col h-full w-full"></div>
+
+    <!-- 載入 React JSX 元件，注意載入順序 (MapComponent 先，App 後) -->
+    <script type="text/babel" src="MapComponent.jsx"></script>
+    <script type="text/babel" src="App.jsx"></script>
+</body>
+
+</html>
+</file>
+
+<file path="main.py">
+import os
+from datetime import datetime, timedelta
+from fastapi import FastAPI, Depends, HTTPException, status, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, Text, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+import bcrypt
+import jwt
+
+# 匯入 Gemini AI 行程生成引擎
+from ai_engine import generate_travel_itinerary
+
+# ---------------------------------------------------------------------------
+# 資料庫設定 (SQLite)
+# ---------------------------------------------------------------------------
+DATABASE_URL = "sqlite:///./loka.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# 使用者資料表模型 (SQLAlchemy)
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, nullable=True)
+    password_hash = Column("hashed_password", String, nullable=False)
+    is_premium = Column(Boolean, default=False, nullable=False)
+
+# 行程儲存資料表模型 (SQLAlchemy)
+class ItineraryModel(Base):
+    __tablename__ = "itineraries"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    trip_title = Column(String, nullable=False)
+    itinerary_data = Column(Text, nullable=False)  # 儲存 AI 行程的 JSON 字串
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+# 檢測與處理舊資料庫 schema 相容性 (Database Migration)
+db_file = "loka.db"
+if os.path.exists(db_file):
+    import sqlite3
+    try:
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        # 檢查 users 表中是否存在 email 欄位
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if columns: # 表示 users 表已存在
+            if "email" not in columns:
+                cursor.execute("ALTER TABLE users ADD COLUMN email VARCHAR")
+                conn.commit()
+                print("Successfully migrated database: added email column to users table.")
+        conn.close()
+    except Exception as e:
+        print(f"Database migration failed: {e}")
+
+# 建立所有資料表 (若不存在)
+Base.metadata.create_all(bind=engine)
+
+def get_db():
+    """資料庫 Session 依賴項"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# ---------------------------------------------------------------------------
+# JWT 安全驗證與密碼雜湊
+# ---------------------------------------------------------------------------
+SECRET_KEY = "loka_ultra_secret_key_presentation_2026"
+ALGORITHM = "HS256"
+security = HTTPBearer()
+
+def hash_password(password: str) -> str:
+    """將密碼雜湊加密"""
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """驗證明文密碼與雜湊密碼是否相符"""
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+def create_access_token(data: dict, expires_delta: timedelta = None) -> str:
+    """生成 JWT 驗證 Token"""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(hours=24))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def decode_access_token(token: str) -> dict:
+    """解析並驗證 JWT Token"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.PyJWTError:
+        return None
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> User:
+    """FastAPI 依賴項：驗證 JWT Token 並取得當前登入使用者"""
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="憑證無效或已過期，請重新登入。",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    username: str = payload.get("sub")
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="無效的驗證憑證。",
+        )
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="使用者不存在。",
+        )
+    return user
+
+# ---------------------------------------------------------------------------
+# Pydantic 請求與回應 Model 定義
+# ---------------------------------------------------------------------------
+class UserAuthSchema(BaseModel):
+    username: str
+    password: str
+
+class UserRegisterSchema(BaseModel):
+    username: str
+    email: str
+    password: str
+
+class UserLoginSchema(BaseModel):
+    username: str
+    password: str
+
+class TripSaveSchema(BaseModel):
+    trip_title: str
+    itinerary_data: dict
+
+class ItineraryRequestSchema(BaseModel):
+    prompt: str
+
+
+# ---------------------------------------------------------------------------
+# FastAPI 應用初始化與配置
+# ---------------------------------------------------------------------------
+app = FastAPI(
+    title="LOKA API",
+    description="輕量化豪華旅行規劃助手 MVP 後端",
+    version="1.0.0"
+)
+
+# CORS 中間件配置 (便於本地與前端跨域通訊)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------------------------------------------------------------------------
+# 靜態前端網頁路由 (為了實現單一指令執行，直接在此伺服前端檔案)
+# ---------------------------------------------------------------------------
+@app.get("/")
+def serve_index():
+    """伺服入口 HTML 檔案"""
+    if not os.path.exists("index.html"):
+        raise HTTPException(status_code=404, detail="前端 index.html 檔案不存在。")
+    return FileResponse("index.html", headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+
+@app.get("/App.jsx")
+def serve_app_jsx():
+    """伺服 App.jsx 組件，指定 application/javascript MimeType"""
+    if not os.path.exists("App.jsx"):
+        raise HTTPException(status_code=404, detail="前端 App.jsx 檔案不存在。")
+    return FileResponse("App.jsx", media_type="application/javascript", headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+
+@app.get("/MapComponent.jsx")
+def serve_map_component_jsx():
+    """伺服 MapComponent.jsx 組件，指定 application/javascript MimeType"""
+    if not os.path.exists("MapComponent.jsx"):
+        raise HTTPException(status_code=404, detail="前端 MapComponent.jsx 檔案不存在。")
+    return FileResponse("MapComponent.jsx", media_type="application/javascript", headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+
+@app.get("/static/{file_path:path}")
+def serve_static(file_path: str):
+    """伺服本地 static 目錄中的靜態資源（React, Babel, Leaflet 等）"""
+    # 預防路徑穿越，清理路徑
+    clean_path = file_path.replace("..", "").lstrip("/")
+    full_path = os.path.join("static", clean_path)
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail=f"靜態檔案 {clean_path} 不存在。")
+    
+    # 根據副檔名判斷並回傳對應的 MIME 類型
+    media_type = None
+    if full_path.endswith(".js"):
+        media_type = "application/javascript"
+    elif full_path.endswith(".css"):
+        media_type = "text/css"
+    elif full_path.endswith(".png"):
+        media_type = "image/png"
+    elif full_path.endswith(".jpg") or full_path.endswith(".jpeg"):
+        media_type = "image/jpeg"
+        
+    return FileResponse(full_path, media_type=media_type)
+
+# ---------------------------------------------------------------------------
+# 商業邏輯 API 路由
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 輔助工具函數 (Deep Link Generator)
+# ---------------------------------------------------------------------------
+def construct_tiket_urls(destination: str, start_date: str, end_date: str, guest_count: int) -> dict:
+    """
+    根據目的地、日期與旅客數，自動生成 Tiket.com 機票及飯店的深層搜尋連結。
+    """
+    dest_clean = destination.strip()
+    dest_lower = dest_clean.lower()
+    
+    # 常用機場代碼映射
+    airport_code = "DPS"  # 預設巴里島伍拉·賴國際機場
+    if "jakarta" in dest_lower:
+        airport_code = "CGK"
+    elif "surabaya" in dest_lower:
+        airport_code = "SUB"
+    elif "lombok" in dest_lower:
+        airport_code = "LOP"
+    elif "singapore" in dest_lower:
+        airport_code = "SIN"
+    elif "bangkok" in dest_lower:
+        airport_code = "BKK"
+    
+    # Tiket.com 機票深層連結：設定從雅加達 (CGK) 飛往目的地機場
+    flight_url = f"https://www.tiket.com/pesawat/search?d=CGK&a={airport_code}&date={start_date}&adult={guest_count}"
+    
+    # Tiket.com 飯店深層連結
+    hotel_url = f"https://www.tiket.com/hotel/search?q={dest_clean}&checkin={start_date}&checkout={end_date}&adult={guest_count}&room=1"
+    
+    return {
+        "flight_url": flight_url,
+        "hotel_url": hotel_url
+    }
+
+# ---------------------------------------------------------------------------
+# 商業邏輯 API 路由
+# ---------------------------------------------------------------------------
+@app.post("/api/auth/register")
+def auth_register(auth_data: UserRegisterSchema, db: Session = Depends(get_db)):
+    """新版使用者註冊端點 (支援 email)"""
+    existing_user = db.query(User).filter(User.username == auth_data.username).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="該使用者名稱已被註冊。"
+        )
+    
+    new_user = User(
+        username=auth_data.username,
+        email=auth_data.email,
+        password_hash=hash_password(auth_data.password),
+        is_premium=False
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    token = create_access_token(data={"sub": new_user.username})
+    return {
+        "message": "註冊成功",
+        "access_token": token,
+        "token_type": "bearer",
+        "username": new_user.username,
+        "is_premium": new_user.is_premium
+    }
+
+@app.post("/api/auth/login")
+def auth_login(auth_data: UserLoginSchema, db: Session = Depends(get_db)):
+    """新版使用者登入端點"""
+    user = db.query(User).filter(User.username == auth_data.username).first()
+    if not user or not verify_password(auth_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="帳號或密碼錯誤。"
+        )
+    
+    token = create_access_token(data={"sub": user.username})
+    return {
+        "message": "登入成功",
+        "access_token": token,
+        "token_type": "bearer",
+        "username": user.username,
+        "is_premium": user.is_premium
+    }
+
+@app.post("/api/trips/save")
+def save_trip(req_data: TripSaveSchema, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """保存客製化行程 API (受 JWT 身分驗證保護)"""
+    try:
+        import json
+        new_trip = ItineraryModel(
+            user_id=current_user.id,
+            trip_title=req_data.trip_title,
+            itinerary_data=json.dumps(req_data.itinerary_data, ensure_ascii=False),
+        )
+        db.add(new_trip)
+        db.commit()
+        db.refresh(new_trip)
+        return {
+            "message": "Trip saved successfully",
+            "trip_id": new_trip.id,
+            "title": new_trip.trip_title
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"儲存行程失敗: {str(e)}"
+        )
+
+# ----------------- 向下相容舊版登入與註冊路由 -----------------
+@app.post("/api/register")
+def register_user(auth_data: UserAuthSchema, db: Session = Depends(get_db)):
+    """舊版註冊路由相容"""
+    existing_user = db.query(User).filter(User.username == auth_data.username).first()
+    if existing_user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="該使用者名稱已被註冊。")
+    
+    new_user = User(
+        username=auth_data.username,
+        email=None,
+        password_hash=hash_password(auth_data.password),
+        is_premium=False
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    token = create_access_token(data={"sub": new_user.username})
+    return {
+        "message": "註冊成功",
+        "access_token": token,
+        "token_type": "bearer",
+        "username": new_user.username,
+        "is_premium": new_user.is_premium
+    }
+
+@app.post("/api/login")
+def login_user(auth_data: UserAuthSchema, db: Session = Depends(get_db)):
+    """舊版登入路由相容"""
+    user = db.query(User).filter(User.username == auth_data.username).first()
+    if not user or not verify_password(auth_data.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="帳號或密碼錯誤。")
+    
+    token = create_access_token(data={"sub": user.username})
+    return {
+        "message": "登入成功",
+        "access_token": token,
+        "token_type": "bearer",
+        "username": user.username,
+        "is_premium": user.is_premium
+    }
+
+@app.get("/api/me")
+def get_user_profile(current_user: User = Depends(get_current_user)):
+    """取得當前登入使用者的個人檔案"""
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "is_premium": current_user.is_premium
+    }
+
+@app.post("/api/upgrade")
+def upgrade_to_premium(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """升級使用者至 Premium 會員"""
+    current_user.is_premium = True
+    db.commit()
+    db.refresh(current_user)
+    return {
+        "message": "升級成功！您已解鎖 LOKA Premium 尊榮服務。",
+        "username": current_user.username,
+        "is_premium": current_user.is_premium
+    }
+
+@app.post("/api/generate-itinerary")
+def api_generate_itinerary(req_data: ItineraryRequestSchema, current_user: User = Depends(get_current_user)):
+    """行程規劃生成 API (受登入保護)"""
+    try:
+        # 呼叫 Gemini AI 引擎
+        itinerary_data = generate_travel_itinerary(req_data.prompt)
+        
+        # 使用正則表達式解析旅客數量，預設為 2 位
+        import re
+        match = re.search(r"for (\d+) travelers", req_data.prompt)
+        guest_count = int(match.group(1)) if match else 2
+        
+        # 取得目的地及日期以利生成深層連結
+        dest = itinerary_data.get("destination", "Bali")
+        s_date = itinerary_data.get("start_date", "2026-07-01")
+        e_date = itinerary_data.get("end_date", "2026-07-03")
+        
+        urls = construct_tiket_urls(dest, s_date, e_date, guest_count)
+        
+        # 注入 Tiket.com 機票及飯店搜尋深層連結至 payload
+        if "flight_logistics" in itinerary_data:
+            itinerary_data["flight_logistics"]["booking_url"] = urls["flight_url"]
+        if "hotel_logistics" in itinerary_data:
+            itinerary_data["hotel_logistics"]["booking_url"] = urls["hotel_url"]
+            
+        return itinerary_data
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"AI 生成行程失敗: {str(e)}"
+        )
+
+class PaymentRequestSchema(BaseModel):
+    card_number: str
+    expiry: str
+    cvv: str
+
+@app.post('/api/payment/simulate')
+def simulate_payment(req_data: PaymentRequestSchema, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if len(req_data.card_number.replace(' ', '')) < 16:
+        raise HTTPException(status_code=400, detail='Invalid card number architecture.')
+    current_user.is_premium = True
+    db.commit()
+    db.refresh(current_user)
+    return {'message': 'Payment verified via mock gateway. Premium status activated!', 'is_premium': True}
+
+# ---------------------------------------------------------------------------
+# 本地執行進入點
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    # 啟動本地開發伺服器，預設連接埠 8000
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
+</file>
+
+<file path="MapComponent.jsx">
+const { useState, useEffect, useRef } = React;
+
+/**
+ * LOKA Leaflet 地圖元件
+ * 整合 OSRM 真實路線 API 與 Freemium 訂閱牆 (Paywall)
+ */
+const MapComponent = ({ itinerary, lang, focusedCoords }) => {
+    const mapRef = useRef(null);
+    const mapInstance = useRef(null);
+    const routeLayersRef = useRef([]);
+    const markerLayersRef = useRef([]);
+
+    // 多語系字典定義
+    const translations = {
+        en: {
+            premiumTitle: "LOKA Premium Map Navigation",
+            premiumDesc: "Unlock OSRM real-world driving paths, interactive routing, and precision turn-by-turn road tracking in Bali.",
+            upgradeBtn: "Unlock Premium Access",
+            cost: "Cost: "
+        },
+        'zh-tw': {
+            premiumTitle: "LOKA 尊榮地圖導航",
+            premiumDesc: "升級解鎖 OSRM 真實道路駕駛路徑規劃、互動式路由追蹤及巴里島精準路線導航。",
+            upgradeBtn: "立即解鎖 Premium 權限",
+            cost: "預估花費："
+        }
+    };
+
+    const t = translations[lang] || translations['en'];
+
+    // ---------------------------------------------------------------------------
+    // 初始化地圖實體
+    // ---------------------------------------------------------------------------
+    useEffect(() => {
+        if (!mapInstance.current && mapRef.current) {
+            // 巴里島中心經緯度 [-8.4095, 115.1889]，預設縮放 10
+            mapInstance.current = L.map(mapRef.current, {
+                zoomControl: false,
+                attributionControl: false
+            }).setView([-8.4095, 115.1889], 10);
+
+            // 引入 CartoDB Voyager 無標籤輕量地圖圖磚，完美呼應熱帶海島氛圍
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                maxZoom: 19
+            }).addTo(mapInstance.current);
+
+            // 自訂 Zoom 按鈕至右下角，保持介面簡潔
+            L.control.zoom({ position: 'bottomright' }).addTo(mapInstance.current);
+        }
+    }, []);
+
+    // ---------------------------------------------------------------------------
+    // 監聽外部 focusedCoords 的變化以執行平滑 flyTo 動態對焦
+    // ---------------------------------------------------------------------------
+    useEffect(() => {
+        if (mapInstance.current && focusedCoords) {
+            mapInstance.current.flyTo(focusedCoords, 14, {
+                animate: true,
+                duration: 1.2
+            });
+        }
+    }, [focusedCoords]);
+
+    // ---------------------------------------------------------------------------
+    // 行程地標與真實道路路線渲染
+    // ---------------------------------------------------------------------------
+    useEffect(() => {
+        if (!mapInstance.current || !itinerary) return;
+
+        // 清理所有既存的 Marker 與 Route 圖層
+        routeLayersRef.current.forEach(layer => mapInstance.current.removeLayer(layer));
+        markerLayersRef.current.forEach(layer => mapInstance.current.removeLayer(layer));
+        routeLayersRef.current = [];
+        markerLayersRef.current = [];
+
+        // 扁平化行程中的所有活動景點
+        const allActivities = [];
+        itinerary.days.forEach(day => {
+            day.places?.forEach((act, actIdx) => {
+                allActivities.push({
+                    ...act,
+                    dayNum: day.day,
+                    index: actIdx + 1
+                });
+            });
+        });
+
+        if (allActivities.length === 0) return;
+
+        const bounds = L.latLngBounds();
+
+        // 1. 繪製景點 Marker 點
+        allActivities.forEach(act => {
+            const latlng = [act.latitude, act.longitude];
+            bounds.extend(latlng);
+
+            // 採用純 HTML+Tailwind 的 DivIcon 解決傳統圖片丟失 bug，並呼應奢華暗綠色調
+            const icon = L.divIcon({
+                html: `<div class="w-8 h-8 rounded-full bg-white text-[#0A3B2E] border-2 border-[#0A3B2E] font-extrabold flex items-center justify-center shadow-lg transform hover:scale-110 transition-transform duration-200">
+                         ${act.dayNum}-${act.index}
+                       </div>`,
+                className: 'custom-loka-marker-icon',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            });
+
+            const popupContent = `
+                <div class="p-3 text-[#0A3B2E] font-sans">
+                    <div class="font-extrabold text-sm border-b border-gray-100 pb-1 mb-1">${act.title}</div>
+                    <div class="text-xs text-gray-500 leading-relaxed">${act.description}</div>
+                </div>
+            `;
+
+            const marker = L.marker(latlng, { icon })
+                .bindPopup(popupContent)
+                .addTo(mapInstance.current);
+
+            markerLayersRef.current.push(marker);
+        });
+
+        // 自動聚焦調整視角以貼合所有標記點
+        mapInstance.current.fitBounds(bounds, { padding: [60, 60] });
+
+        // 2. 請求 OSRM 真實行車道路路徑 (地圖與 OSRM 真實道路導航現在對所有使用者 100% 免費)
+        if (allActivities.length >= 2) {
+            // 拼接經緯度格式為 lng,lat;lng,lat;... 以供 OSRM 多點導航使用
+            const coordsString = allActivities.map(act => `${act.longitude},${act.latitude}`).join(';');
+            const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordsString}?overview=full&geometries=geojson`;
+
+            fetch(osrmUrl)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.routes && data.routes.length > 0) {
+                        const routeGeoJSON = data.routes[0].geometry;
+                        
+                        // 底層粗發光深綠道路線
+                        const outerRoute = L.geoJSON(routeGeoJSON, {
+                            style: {
+                                color: '#114D3E',
+                                weight: 6,
+                                opacity: 0.7,
+                                lineJoin: 'round'
+                            }
+                        }).addTo(mapInstance.current);
+
+                        // 頂層細白核心高光線，建構出極客精品線條感
+                        const innerRoute = L.geoJSON(routeGeoJSON, {
+                            style: {
+                                color: '#FFFFFF',
+                                weight: 3,
+                                opacity: 1,
+                                lineJoin: 'round'
+                            }
+                        }).addTo(mapInstance.current);
+
+                        routeLayersRef.current.push(outerRoute, innerRoute);
+                    }
+                })
+                .catch(err => {
+                    console.error("OSRM API 請求失敗，改為繪製虛線備份: ", err);
+                    const latlngs = allActivities.map(act => [act.latitude, act.longitude]);
+                    const fallbackLine = L.polyline(latlngs, {
+                        color: '#FFFFFF',
+                        weight: 3,
+                        dashArray: '5, 8',
+                        opacity: 0.8
+                    }).addTo(mapInstance.current);
+                    routeLayersRef.current.push(fallbackLine);
+                });
+        }
+    }, [itinerary, lang]);
+
+    return (
+        <div className="relative w-full h-full rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
+            {/* Leaflet 地圖掛載點 */}
+            <div id="map" ref={mapRef} className="w-full h-full z-10"></div>
+
+            {/* 地圖元件現在對全體使用者免費，不再顯示 Premium 覆蓋層 */}
+        </div>
+    );
+};
+
+// 掛載至 window 全域命名空間以供 App.jsx 存取
+window.MapComponent = MapComponent;
+
+</file>
+
+</project_files>
+
+現在，請確認你已經理解了專案的結構與內容。接著，我會告訴你我想修改的功能。
