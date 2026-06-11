@@ -12,7 +12,7 @@ import bcrypt
 import jwt
 
 # 匯入 Gemini AI 行程生成引擎
-from ai_engine import generate_travel_itinerary
+from ai_engine import generate_travel_itinerary, regenerate_single_place
 
 # ---------------------------------------------------------------------------
 # 資料庫設定 (SQLite)
@@ -149,6 +149,9 @@ class TripSaveSchema(BaseModel):
 
 class ItineraryRequestSchema(BaseModel):
     prompt: str
+    start_date: str = ""
+    end_date: str = ""
+    people_count: int = 2
 
 
 # ---------------------------------------------------------------------------
@@ -221,32 +224,117 @@ def serve_static(file_path: str):
 # ---------------------------------------------------------------------------
 # 輔助工具函數 (Deep Link Generator)
 # ---------------------------------------------------------------------------
-def construct_tiket_urls(destination: str, start_date: str, end_date: str, guest_count: int) -> dict:
+def _to_traveloka_date(date_str: str) -> str:
+    """Convert YYYY-MM-DD → DD-MM-YYYY for Traveloka URL spec format."""
+    if not date_str or len(date_str) < 10:
+        return date_str
+    parts = date_str.split('-')
+    if len(parts) == 3:
+        return f"{parts[2]}-{parts[1]}-{parts[0]}"
+    return date_str
+
+# 全面的城市→機場代碼對照表 (關鍵字匹配)
+_AIRPORT_MAP = {
+    # Indonesia
+    "bali": "DPS", "denpasar": "DPS", "ubud": "DPS", "seminyak": "DPS",
+    "kuta": "DPS", "canggu": "DPS", "nusa dua": "DPS", "jimbaran": "DPS",
+    "jakarta": "CGK", "tangerang": "CGK", "bekasi": "CGK", "bogor": "CGK",
+    "depok": "CGK", "serpong": "CGK",
+    "surabaya": "SUB", "sidoarjo": "SUB", "gresik": "SUB", "mojokerto": "SUB",
+    "malang": "MLG", "yogyakarta": "JOG", "jogja": "JOG", "solo": "SOC",
+    "semarang": "SRG", "bandung": "BDO",
+    "lombok": "LOP", "mataram": "LOP", "senggigi": "LOP",
+    "makassar": "UPG", "ujung pandang": "UPG", "sulawesi": "UPG",
+    "medan": "KNO", "balikpapan": "BPN", "samarinda": "SRI",
+    "manado": "MDC", "palu": "PLW", "palembang": "PLM",
+    "pontianak": "PNK", "banjarmasin": "BDJ", "kupang": "KOE",
+    "ambon": "AMQ", "sorong": "SOQ", "jayapura": "DJJ",
+    "labuan bajo": "LBJ", "flores": "LBJ", "komodo": "LBJ",
+    "raja ampat": "SOQ", "ternate": "TTE",
+    # Southeast Asia
+    "singapore": "SIN",
+    "bangkok": "BKK", "pattaya": "BKK", "hua hin": "HHQ",
+    "phuket": "HKT", "chiang mai": "CNX", "chiang rai": "CEI",
+    "kuala lumpur": "KUL", "kl": "KUL", "putrajaya": "KUL", "genting": "KUL",
+    "penang": "PEN", "langkawi": "LGK", "kota kinabalu": "BKI", "johor": "JHB",
+    "hanoi": "HAN", "ho chi minh": "SGN", "saigon": "SGN", "danang": "DAD",
+    "manila": "MNL", "cebu": "CEB", "boracay": "MPH",
+    "phnom penh": "PNH", "siem reap": "REP",
+    "yangon": "RGN", "mandalay": "MDL",
+    "colombo": "CMB",
+    # East Asia
+    "tokyo": "TYO", "osaka": "KIX", "kyoto": "KIX", "nara": "KIX",
+    "hiroshima": "HIJ", "fukuoka": "FUK", "sapporo": "CTS", "okinawa": "OKA",
+    "seoul": "ICN", "busan": "PUS", "jeju": "CJU",
+    "beijing": "PEK", "shanghai": "PVG", "guangzhou": "CAN",
+    "chengdu": "CTU", "xian": "XIY", "hangzhou": "HGH",
+    "hong kong": "HKG",
+    "taipei": "TPE", "taichung": "RMQ", "kaohsiung": "KHH",
+    "macau": "MFM",
+    # South Asia
+    "maldives": "MLE", "male": "MLE",
+    "delhi": "DEL", "mumbai": "BOM", "bangalore": "BLR",
+    "goa": "GOI", "chennai": "MAA", "kolkata": "CCU",
+    "kathmandu": "KTM", "colombo": "CMB",
+    # Middle East
+    "dubai": "DXB", "abu dhabi": "AUH", "sharjah": "SHJ",
+    "doha": "DOH", "riyadh": "RUH", "jeddah": "JED", "muscat": "MCT",
+    # Australia / Pacific
+    "sydney": "SYD", "melbourne": "MEL", "brisbane": "BNE",
+    "perth": "PER", "adelaide": "ADL", "cairns": "CNS",
+    "auckland": "AKL", "queenstown": "ZQN",
+    # Europe
+    "london": "LHR", "paris": "CDG", "amsterdam": "AMS",
+    "rome": "FCO", "milan": "MXP", "barcelona": "BCN", "madrid": "MAD",
+    "berlin": "BER", "munich": "MUC", "vienna": "VIE", "zurich": "ZRH",
+    "istanbul": "IST", "athens": "ATH", "prague": "PRG",
+    # Americas
+    "new york": "JFK", "los angeles": "LAX", "chicago": "ORD",
+    "miami": "MIA", "san francisco": "SFO", "vancouver": "YVR",
+    "toronto": "YYZ", "cancun": "CUN",
+}
+
+def _get_airport_code(destination: str) -> str | None:
+    """Return IATA airport code for a destination string, or None if unknown."""
+    dest_lower = destination.lower()
+    for keyword, code in _AIRPORT_MAP.items():
+        if keyword in dest_lower:
+            return code
+    return None
+
+def construct_booking_urls(destination: str, start_date: str, end_date: str,
+                           guest_count: int, hotel_name: str = "") -> dict:
     """
-    根據目的地、日期與旅客數，自動生成 Tiket.com 機票及飯店的深層搜尋連結。
+    根據目的地、日期與旅客數，自動生成 Traveloka 機票及飯店的深層搜尋連結。
+    Traveloka 日期格式：DD-MM-YYYY
     """
+    import urllib.parse
     dest_clean = destination.strip()
-    dest_lower = dest_clean.lower()
-    
-    # 常用機場代碼映射
-    airport_code = "DPS"  # 預設巴里島伍拉·賴國際機場
-    if "jakarta" in dest_lower:
-        airport_code = "CGK"
-    elif "surabaya" in dest_lower:
-        airport_code = "SUB"
-    elif "lombok" in dest_lower:
-        airport_code = "LOP"
-    elif "singapore" in dest_lower:
-        airport_code = "SIN"
-    elif "bangkok" in dest_lower:
-        airport_code = "BKK"
-    
-    # Tiket.com 機票深層連結：設定從雅加達 (CGK) 飛往目的地機場
-    flight_url = f"https://www.tiket.com/pesawat/search?d=CGK&a={airport_code}&date={start_date}&adult={guest_count}"
-    
-    # Tiket.com 飯店深層連結
-    hotel_url = f"https://www.tiket.com/hotel/search?q={dest_clean}&checkin={start_date}&checkout={end_date}&adult={guest_count}&room=1"
-    
+
+    dest_airport = _get_airport_code(dest_clean)
+    tv_start = _to_traveloka_date(start_date)
+    tv_end   = _to_traveloka_date(end_date)
+
+    # Traveloka 機票深層連結 (從雅加達 CGK 出發，經濟艙)
+    if dest_airport:
+        flight_url = (
+            f"https://www.traveloka.com/en-id/flight/fullsearch"
+            f"?spec={tv_start}.{tv_start}.CGK.{dest_airport}.{guest_count}.0.0.Economy"
+        )
+    else:
+        # 無對應機場代碼時，退回關鍵字搜尋頁
+        flight_url = (
+            f"https://www.traveloka.com/en-id/flight"
+            f"?q={urllib.parse.quote(dest_clean)}"
+        )
+
+    # Traveloka 飯店深層連結 — 優先使用 AI 推薦飯店名稱，並帶入日期
+    search_name = hotel_name.strip() if hotel_name else dest_clean
+    hotel_url = (
+        f"https://www.traveloka.com/en-id/hotel/search"
+        f"?spec={urllib.parse.quote(search_name)}.{tv_start}.{tv_end}.1.{guest_count}.0"
+    )
+
     return {
         "flight_url": flight_url,
         "hotel_url": hotel_url
@@ -445,17 +533,17 @@ def api_generate_itinerary(req_data: ItineraryRequestSchema, current_user: User 
         # 呼叫 Gemini AI 引擎
         itinerary_data = generate_travel_itinerary(req_data.prompt)
         
-        # 使用正則表達式解析旅客數量，預設為 2 位
+        # 使用前端明確傳入的日期與人數（比 AI 輸出更可靠）
         import re
         match = re.search(r"for (\d+) travelers", req_data.prompt)
-        guest_count = int(match.group(1)) if match else 2
-        
-        # 取得目的地及日期以利生成深層連結
+        guest_count = req_data.people_count if req_data.people_count else (int(match.group(1)) if match else 2)
+
         dest = itinerary_data.get("destination", "Bali")
-        s_date = itinerary_data.get("start_date", "2026-07-01")
-        e_date = itinerary_data.get("end_date", "2026-07-03")
+        s_date = req_data.start_date if req_data.start_date else itinerary_data.get("start_date", "2026-07-01")
+        e_date = req_data.end_date if req_data.end_date else itinerary_data.get("end_date", "2026-07-03")
         
-        urls = construct_tiket_urls(dest, s_date, e_date, guest_count)
+        hotel_name = itinerary_data.get("hotel_logistics", {}).get("name", "")
+        urls = construct_booking_urls(dest, s_date, e_date, guest_count, hotel_name)
         
         # 注入 Tiket.com 機票及飯店搜尋深層連結至 payload
         if "flight_logistics" in itinerary_data:
@@ -469,6 +557,24 @@ def api_generate_itinerary(req_data: ItineraryRequestSchema, current_user: User 
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"AI 生成行程失敗: {str(e)}"
         )
+
+class RegeneratePlaceSchema(BaseModel):
+    destination: str
+    day_number: int
+    existing_titles: list
+
+@app.post("/api/regenerate-place")
+def api_regenerate_place(req_data: RegeneratePlaceSchema, current_user: User = Depends(get_current_user)):
+    """單一景點替換生成 API — 為指定天數建議一個新的不重複景點"""
+    try:
+        new_place = regenerate_single_place(req_data.destination, req_data.day_number, req_data.existing_titles)
+        return new_place
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"景點重新生成失敗: {str(e)}"
+        )
+
 
 class PaymentRequestSchema(BaseModel):
     card_number: str

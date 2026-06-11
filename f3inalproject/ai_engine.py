@@ -8,7 +8,7 @@ from google.genai import types
 # ===========================================================================
 # 🔑 PASTE YOUR ACTUAL GEMINI API KEY HERE
 # ===========================================================================
-MY_GEMINI_KEY = "YOUR_API_KEY" 
+MY_GEMINI_KEY = "GEMINI_KEY" 
 
 # Initialize the official 2026 Google Gen AI client explicitly passing the key
 client = genai.Client(api_key=MY_GEMINI_KEY)
@@ -64,7 +64,10 @@ def generate_travel_itinerary(user_prompt: str) -> dict:
         "3. Do not output any outbound links, ticket booking URLs, or external agency formulas.\n"
         "4. All cost formatting in flight_logistics must include IDR and USD conversions.\n"
         "5. The booking_search_query and maps_search_query fields must be URL encoded (e.g. spaces replaced with '+').\n"
-        "6. The image_url field in PlaceSchema must be a valid, high-resolution Unsplash photo URL relevant to the specific attraction, containing a real photo ID, e.g., 'https://images.unsplash.com/photo-1537996194471-e657df975ab4?auto=format&fit=crop&w=600&q=80'."
+        "6. The image_url field in PlaceSchema must be a valid, high-resolution Unsplash photo URL relevant to the specific attraction, containing a real photo ID, e.g., 'https://images.unsplash.com/photo-1537996194471-e657df975ab4?auto=format&fit=crop&w=600&q=80'.\n"
+        "7. ARRIVAL DAY (Day 1): The first place must be the destination's main international airport (use airport name, arrival terminal coordinates, and a welcoming arrival description). You may add 1-2 light afternoon activities only if the flight arrives early enough.\n"
+        "8. DEPARTURE DAY (last day): The last place must be the destination's main international airport (use airport name, departure terminal coordinates, and a farewell description). Only include brief morning activities or hotel checkout before the airport. Do NOT schedule full sightseeing on the departure day.\n"
+        "9. Middle days between Day 1 and the last day are full sightseeing days with 3-4 unique attractions each."
     )
 
     try:
@@ -86,4 +89,41 @@ def generate_travel_itinerary(user_prompt: str) -> dict:
     except Exception as e:
         # If something breaks, print it clearly to the terminal window so we can see it
         print(f"\n[CRITICAL ERROR] Gemini Engine Failed: {str(e)}\n")
+        raise e
+
+
+def regenerate_single_place(destination: str, day_number: int, existing_titles: list) -> dict:
+    """
+    Asks Gemini to suggest ONE new attraction for a specific day,
+    avoiding all places already in the itinerary.
+    """
+    system_instruction = (
+        "You are LOKA, an elite luxury travel planning intelligence engine.\n"
+        "Generate exactly ONE new unique attraction/place for the given destination and day number.\n"
+        "CRITICAL CONSTRAINTS:\n"
+        "1. Do NOT suggest any place whose title appears in the excluded list.\n"
+        "2. The image_url must be a valid Unsplash URL with a real photo ID, e.g., 'https://images.unsplash.com/photo-1537996194471-e657df975ab4?auto=format&fit=crop&w=600&q=80'.\n"
+        "3. maps_search_query must be URL-encoded (spaces as '+').\n"
+        "4. Return a single PlaceSchema JSON object only.\n"
+    )
+    excluded = ", ".join(existing_titles) if existing_titles else "none"
+    prompt = (
+        f"Suggest ONE new luxury attraction in {destination} suitable for Day {day_number} of a trip. "
+        f"Do NOT suggest any of these already-included places: [{excluded}]."
+    )
+
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                response_mime_type="application/json",
+                response_schema=PlaceSchema,
+                temperature=0.8,
+            ),
+        )
+        return json.loads(response.text)
+    except Exception as e:
+        print(f"\n[CRITICAL ERROR] Place Regeneration Failed: {str(e)}\n")
         raise e

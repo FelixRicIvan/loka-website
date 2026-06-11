@@ -1,4 +1,4 @@
-const { useState, useEffect } = React;
+const { useState, useEffect, useMemo, useCallback } = React;
 
 // ---------------------------------------------------------------------------
 // 內建展示行程 (為預防簡報展示時無 Gemini API 金鑰或網路中斷提供防護)
@@ -186,7 +186,13 @@ const dictionary = {
         daysUnit: "天",
         peopleUnit: "人",
         notionCopied: "Notion 格式化區塊已複製到剪貼簿！",
-        pdfDownloaded: "專屬奢華行程 HTML 下載成功！"
+        pdfDownloaded: "專屬奢華行程 HTML 下載成功！",
+        savedTripsBtn: "我的行程",
+        savedTripsTitle: "我的已儲存行程",
+        noSavedTrips: "尚無已儲存的行程。立即規劃並儲存您的第一個專屬旅程！",
+        loadTrip: "載入",
+        deleteTrip: "刪除",
+        close: "關閉"
     }
 };
 
@@ -223,6 +229,354 @@ const GracefulImage = ({ src, alt, title }) => {
     );
 };
 
+// ---------------------------------------------------------------------------
+// PlaceCard — Individual activity/attraction card inside a day
+// ---------------------------------------------------------------------------
+const PlaceCard = ({ place, dayNum, idx, isChecked, onToggleCheck, onFocus, onRemove, removeTitle }) => (
+    <div
+        onClick={() => onFocus([place.latitude, place.longitude])}
+        className={`relative rounded-xl border cursor-pointer select-none transition-all duration-200 overflow-hidden ${
+            isChecked
+                ? 'bg-gray-50/90 border-gray-200 opacity-60 text-slate-400'
+                : 'bg-white hover:shadow-xl border-gray-100 shadow-md text-slate-800'
+        }`}
+    >
+        {/* Remove button */}
+        <button
+            onClick={(e) => { e.stopPropagation(); onRemove(); }}
+            className="absolute top-2 right-2 z-10 w-6 h-6 rounded-full bg-black/40 hover:bg-red-600 flex items-center justify-center text-white transition-all duration-200"
+            title={removeTitle}
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+        </button>
+
+        <GracefulImage src={place.image_url} alt={place.title} title={place.title} />
+
+        <div className="p-4">
+            <div className="flex items-start gap-3">
+                {/* Checkbox */}
+                <div className="mt-0.5" onClick={(e) => { e.stopPropagation(); onToggleCheck(); }}>
+                    <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${
+                        isChecked ? 'bg-[#0A3B2E] border-[#0A3B2E]' : 'border-gray-300 bg-white'
+                    }`}>
+                        {isChecked && (
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 text-white" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                            </svg>
+                        )}
+                    </div>
+                </div>
+
+                <div className="flex-grow">
+                    <h6 className={`text-sm font-extrabold text-slate-900 transition-all ${isChecked ? 'line-through text-slate-400' : ''}`}>
+                        {place.title}
+                    </h6>
+                    <p className={`text-xs text-slate-500 leading-relaxed mt-1.5 transition-all ${isChecked ? 'line-through text-slate-300' : ''}`}>
+                        {place.description}
+                    </p>
+                    <div className="mt-4 flex items-center justify-between">
+                        <span className="text-slate-400 text-[10px] font-bold">D{dayNum}-{idx + 1}</span>
+                        <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${place.maps_search_query}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 py-1.5 px-3 bg-[#0A3B2E] hover:bg-[#114D3E] text-white rounded-lg text-[10px] font-bold transition-all duration-200 hover:shadow-md active:scale-95"
+                        >
+                            📍 View in Google Maps
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+);
+
+// ---------------------------------------------------------------------------
+// DayCard — One day's container with its PlaceCards + suggest button
+// ---------------------------------------------------------------------------
+const DayCard = ({ day, dayIndex, checkedActivities, onToggleCheck, onFocus, onRemove, onSuggest, regeneratingDay, lang, t }) => (
+    <div className="relative space-y-4 bg-[#114D3E]/10 border border-white/10 rounded-2xl p-6 backdrop-blur-sm flex flex-col col-span-full">
+        {/* Day header */}
+        <div className="flex items-center gap-2 mb-2 pb-2 border-b border-white/10">
+            <span className="w-4 h-4 rounded-full bg-white flex items-center justify-center">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#0A3B2E]"></span>
+            </span>
+            <h5 className="text-sm font-black bg-white/10 px-2.5 py-1 rounded text-white tracking-wider">
+                {t.day} {day.day}
+            </h5>
+        </div>
+
+        {/* Place cards grid */}
+        <div className="flex-grow grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {day.places?.map((place, idx) => {
+                const checkedKey = `${day.day}-${idx}`;
+                return (
+                    <PlaceCard
+                        key={idx}
+                        place={place}
+                        dayNum={day.day}
+                        idx={idx}
+                        isChecked={!!checkedActivities[checkedKey]}
+                        onToggleCheck={() => onToggleCheck(day.day, idx)}
+                        onFocus={onFocus}
+                        onRemove={() => onRemove(dayIndex, idx)}
+                        removeTitle={lang === 'zh-tw' ? '移除此景點' : 'Remove this place'}
+                    />
+                );
+            })}
+        </div>
+
+        {/* Suggest new place button */}
+        <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onSuggest(day.day, dayIndex); }}
+            disabled={regeneratingDay !== null}
+            className="mt-2 w-full py-2 border border-dashed border-white/20 hover:border-white/40 text-white/50 hover:text-white/80 text-[11px] font-bold rounded-xl transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-40"
+        >
+            {regeneratingDay === dayIndex ? (
+                <>
+                    <svg className="animate-spin h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4}></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>{lang === 'zh-tw' ? 'AI 正在尋找新景點...' : 'AI is finding a new place...'}</span>
+                </>
+            ) : (
+                <>
+                    <span>✦</span>
+                    <span>{lang === 'zh-tw' ? '建議新景點' : 'Suggest a New Place'}</span>
+                </>
+            )}
+        </button>
+    </div>
+);
+
+// ---------------------------------------------------------------------------
+// LogisticsSection — Flight + Hotel recommendation cards
+// ---------------------------------------------------------------------------
+const LogisticsSection = ({ itinerary }) => (
+    <div className="col-span-full grid grid-cols-1 md:grid-cols-2 gap-6 mb-2">
+        {/* Flight Card */}
+        <div className="bg-white shadow-xl border border-gray-100 rounded-2xl p-6 text-slate-800 flex flex-col justify-between transition-all duration-200 hover:shadow-md">
+            <div>
+                <div className="flex items-center gap-1.5 mb-3">
+                    <span className="text-xl">✈️</span>
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500">Flight Recommendation</span>
+                </div>
+                <h5 className="text-sm font-black text-slate-900 mb-1.5 leading-snug">{itinerary.flight_logistics?.carrier || "Luxury Airline"}</h5>
+                <p className="text-xs text-slate-600 font-medium mb-4">Est. Cost: {itinerary.flight_logistics?.estimated_cost}</p>
+            </div>
+            <a
+                href={itinerary.flight_logistics?.booking_url || `https://www.traveloka.com/en-id/flight?q=${itinerary.flight_logistics?.booking_search_query || ''}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-2.5 bg-[#0A3B2E] hover:bg-[#114D3E] text-white text-xs font-bold rounded-lg text-center transition-all duration-200 flex items-center justify-center gap-1 hover:shadow-md"
+            >
+                ✈️ Search on Traveloka
+            </a>
+        </div>
+
+        {/* Hotel Card */}
+        <div className="bg-white shadow-xl border border-gray-100 rounded-2xl p-6 text-slate-800 flex flex-col justify-between transition-all duration-200 hover:shadow-md">
+            <div>
+                <div className="flex items-center gap-1.5 mb-3">
+                    <span className="text-xl">🏨</span>
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500">Hotel Recommendation</span>
+                </div>
+                <h5 className="text-sm font-black text-slate-900 mb-1.5 leading-snug">{itinerary.hotel_logistics?.name || "Luxury Resort"}</h5>
+                <p className="text-xs text-slate-600 leading-relaxed mb-4 line-clamp-3">{itinerary.hotel_logistics?.description}</p>
+            </div>
+            <div className="flex flex-col gap-2">
+                <a
+                    href={
+                        itinerary.hotel_logistics?.latitude && itinerary.hotel_logistics?.longitude
+                            ? `https://www.google.com/maps/search/?api=1&query=${itinerary.hotel_logistics.latitude},${itinerary.hotel_logistics.longitude}`
+                            : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(itinerary.hotel_logistics?.name || 'hotel')}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2 border border-[#0A3B2E] text-[#0A3B2E] hover:bg-gray-50 text-xs font-bold rounded-lg transition-all duration-200 text-center block"
+                >
+                    📍 Show on Google Maps
+                </a>
+                <a
+                    href={itinerary.hotel_logistics?.booking_url || `https://www.traveloka.com/en-id/hotel/search?q=${itinerary.hotel_logistics?.booking_search_query || ''}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2.5 bg-[#0A3B2E] hover:bg-[#114D3E] text-white text-xs font-bold rounded-lg text-center transition-all duration-200 flex items-center justify-center gap-1 hover:shadow-md"
+                >
+                    🏨 Search on Traveloka
+                </a>
+            </div>
+        </div>
+    </div>
+);
+
+// ---------------------------------------------------------------------------
+// PaywallModal — Premium upgrade / mock payment modal
+// ---------------------------------------------------------------------------
+const PaywallModal = ({ onClose, onSubmit, cardData, setCardData, paymentLoading, t }) => (
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 backdrop-blur-md p-4">
+        <div className="w-full max-w-md bg-[#0A3B2E]/60 backdrop-blur-xl border border-white/20 shadow-2xl rounded-3xl p-8 relative transform scale-100 transition-all duration-300">
+            <button
+                onClick={onClose}
+                className="absolute top-4 right-4 w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 border border-white/15 flex items-center justify-center text-white/70 hover:text-white transition-all text-xs"
+            >✕</button>
+
+            <div className="w-14 h-14 mx-auto mb-5 bg-white/10 border border-white/20 rounded-full flex items-center justify-center shadow-inner">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+            </div>
+
+            <h3 className="text-xl font-black text-white text-center mb-2 tracking-wide uppercase">{t.paymentTitle}</h3>
+            <p className="text-white/60 text-xs text-center mb-6 leading-relaxed">{t.paymentDesc}</p>
+
+            <form onSubmit={onSubmit} className="space-y-4">
+                <div>
+                    <label className="block text-[9px] font-bold uppercase tracking-wider text-white/70 mb-1.5">{t.cardNumberLabel}</label>
+                    <input
+                        type="text"
+                        required
+                        maxLength="19"
+                        placeholder="4111 2222 3333 4444"
+                        value={cardData.card_number}
+                        onChange={(e) => {
+                            let val = e.target.value.replace(/\D/g, '');
+                            let formatted = val.match(/.{1,4}/g)?.join(' ') || val;
+                            setCardData(prev => ({ ...prev, card_number: formatted }));
+                        }}
+                        className="w-full bg-white/5 border border-white/20 text-white rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-white/20 focus:bg-white/10 transition-all placeholder-white/20"
+                    />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-[9px] font-bold uppercase tracking-wider text-white/70 mb-1.5">{t.expiryLabel}</label>
+                        <input
+                            type="text"
+                            required
+                            maxLength="5"
+                            placeholder="12/28"
+                            value={cardData.expiry}
+                            onChange={(e) => {
+                                let val = e.target.value.replace(/\D/g, '');
+                                if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 4);
+                                setCardData(prev => ({ ...prev, expiry: val }));
+                            }}
+                            className="w-full bg-white/5 border border-white/20 text-white rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-white/20 focus:bg-white/10 transition-all placeholder-white/20 text-center"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-[9px] font-bold uppercase tracking-wider text-white/70 mb-1.5">{t.cvvLabel}</label>
+                        <input
+                            type="password"
+                            required
+                            maxLength="3"
+                            placeholder="***"
+                            value={cardData.cvv}
+                            onChange={(e) => setCardData(prev => ({ ...prev, cvv: e.target.value.replace(/\D/g, '') }))}
+                            className="w-full bg-white/5 border border-white/20 text-white rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-white/20 focus:bg-white/10 transition-all placeholder-white/20 text-center"
+                        />
+                    </div>
+                </div>
+                <button
+                    type="submit"
+                    disabled={paymentLoading}
+                    className="w-full py-3 bg-white text-[#0A3B2E] font-bold rounded-xl shadow-lg hover:bg-[#E2F1ED] active:scale-95 transition-all duration-200 mt-2 text-xs flex items-center justify-center gap-2"
+                >
+                    {paymentLoading ? (
+                        <>
+                            <svg className="animate-spin h-3.5 w-3.5 text-[#0A3B2E]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4}></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span>{t.processingPay}</span>
+                        </>
+                    ) : t.simulatePayBtn}
+                </button>
+            </form>
+        </div>
+    </div>
+);
+
+// ---------------------------------------------------------------------------
+// SavedTripsModal — Browse, load, and delete saved itineraries
+// ---------------------------------------------------------------------------
+const SavedTripsModal = ({ onClose, loading, trips, onLoad, onDelete, t }) => (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-md p-4">
+        <div className="w-full max-w-2xl bg-[#0A3B2E]/75 backdrop-blur-xl border border-white/20 shadow-2xl rounded-3xl p-8 relative flex flex-col max-h-[85vh] transform scale-100 transition-all duration-300">
+            <button
+                onClick={onClose}
+                className="absolute top-4 right-4 w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 border border-white/15 flex items-center justify-center text-white/70 hover:text-white transition-all text-xs"
+            >✕</button>
+
+            <h3 className="text-xl font-black text-white mb-6 tracking-wide uppercase flex items-center gap-2">
+                <span>🔖</span> {t.savedTripsTitle}
+            </h3>
+
+            {loading ? (
+                <div className="flex-grow flex items-center justify-center py-20 text-white/50 text-xs">
+                    <span className="animate-pulse">Loading saved itineraries...</span>
+                </div>
+            ) : trips.length === 0 ? (
+                <div className="flex-grow flex flex-col items-center justify-center py-20 text-center px-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-white/20 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                    </svg>
+                    <p className="text-white/40 text-xs leading-relaxed max-w-sm">{t.noSavedTrips}</p>
+                </div>
+            ) : (
+                <div className="flex-grow overflow-y-auto pr-1 space-y-4 max-h-[55vh]">
+                    {trips.map((trip) => (
+                        <div
+                            key={trip.id}
+                            className="bg-white/5 border border-white/10 hover:border-white/20 rounded-2xl p-5 flex items-center justify-between gap-4 transition-all hover:bg-white/10"
+                        >
+                            <div className="flex-grow min-w-0">
+                                <h4 className="text-sm font-bold text-white truncate">{trip.trip_title}</h4>
+                                <div className="flex items-center gap-3 mt-1.5 text-[10px] text-white/50 font-medium">
+                                    <span>📅 {trip.itinerary_data?.start_date || "N/A"} ~ {trip.itinerary_data?.end_date || "N/A"}</span>
+                                    <span>•</span>
+                                    <span>{new Date(trip.created_at).toLocaleDateString()}</span>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2.5 shrink-0">
+                                <button
+                                    onClick={() => onLoad(trip.itinerary_data)}
+                                    className="py-1.5 px-4 bg-white text-[#0A3B2E] font-bold text-xs rounded-xl shadow hover:bg-[#E2F1ED] active:scale-95 transition-all"
+                                >
+                                    {t.loadTrip}
+                                </button>
+                                <button
+                                    onClick={() => onDelete(trip.id)}
+                                    className="py-1.5 px-3 bg-red-950/40 border border-red-500/30 hover:bg-red-900/40 hover:border-red-500/50 text-red-200 font-bold text-xs rounded-xl transition-all active:scale-95"
+                                >
+                                    {t.deleteTrip}
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            <div className="mt-6 pt-4 border-t border-white/10 flex justify-end">
+                <button
+                    onClick={onClose}
+                    className="py-2 px-6 bg-white/5 border border-white/10 hover:bg-white/10 text-white text-xs font-semibold rounded-xl transition-all"
+                >
+                    {t.close}
+                </button>
+            </div>
+        </div>
+    </div>
+);
+
+// ---------------------------------------------------------------------------
+// App — Main application component
+// ---------------------------------------------------------------------------
 const App = () => {
     // 系統狀態
     const [lang, setLang] = useState('zh-tw'); // 預設使用繁體中文
@@ -258,28 +612,23 @@ const App = () => {
     // 安全非同步地圖載入狀態，防止 React 因渲染 undefined 組件而崩潰
     const [mapLoaded, setMapLoaded] = useState(false);
 
-    const t = dictionary[lang];
+    const t = useMemo(() => dictionary[lang], [lang]);
 
-    // 初始化時若有 Token 則自動載入使用者狀態與已存行程
-    useEffect(() => {
-        if (token) {
-            fetchUserProfile();
-            fetchSavedTrips();
-        }
-    }, [token]);
-
-    // 輪詢檢測全域變數 window.MapComponent 是否已被 Babel standalone 解析完成
-    useEffect(() => {
-        const interval = setInterval(() => {
-            if (window.MapComponent) {
-                setMapLoaded(true);
-                clearInterval(interval);
-            }
-        }, 100);
-        return () => clearInterval(interval);
+    // 切換語系處理常式，避免渲染中使用 Inline 箭頭函數
+    const toggleLanguage = useCallback(() => {
+        setLang(prev => prev === 'en' ? 'zh-tw' : 'en');
     }, []);
 
-    const fetchSavedTrips = async () => {
+    // 顯示全域 Toast 微動畫提示
+    const showToast = useCallback((message) => {
+        setToastMessage(message);
+        setTimeout(() => {
+            setToastMessage('');
+        }, 3000);
+    }, []);
+
+    // 取得當前使用者已存行程
+    const fetchSavedTrips = useCallback(async () => {
         if (!token) return;
         setSavedTripsLoading(true);
         try {
@@ -295,44 +644,49 @@ const App = () => {
         } finally {
             setSavedTripsLoading(false);
         }
-    };
+    }, [token]);
 
-    const handleLoadSavedTrip = (tripData) => {
-        if (!tripData) return;
-        setItinerary(tripData);
-        setCheckedActivities({});
-        
-        // 同步 UI 輸入欄位
-        if (tripData.destination) setDestination(tripData.destination);
-        if (tripData.start_date) setStartDate(tripData.start_date);
-        if (tripData.end_date) setEndDate(tripData.end_date);
-        
-        setShowSavedTripsModal(false);
-        showToast(lang === 'zh-tw' ? '已成功載入行程！' : 'Itinerary loaded successfully!');
-    };
-
-    const handleDeleteSavedTrip = async (tripId) => {
-        const confirmMsg = lang === 'zh-tw' ? '確定要刪除此行程嗎？此動作無法復原。' : 'Are you sure you want to delete this itinerary? This action cannot be undone.';
-        if (!confirm(confirmMsg)) return;
-
+    // 一鍵儲存行程到雲端資料庫
+    const handleSaveItinerary = useCallback(async () => {
+        if (!user) return;
+        if (!itinerary) return;
         try {
-            const res = await fetch(`/api/trips/${tripId}`, {
-                method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${token}` }
+            const res = await fetch('/api/trips/save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    trip_title: itinerary.title || `${itinerary.destination} Bespoke Escape`,
+                    itinerary_data: itinerary
+                })
             });
+            const data = await res.json();
             if (res.ok) {
-                showToast(lang === 'zh-tw' ? '行程已刪除！' : 'Itinerary deleted!');
+                showToast(lang === 'en' ? "Trip saved successfully!" : "行程已成功儲存至雲端！");
                 fetchSavedTrips();
             } else {
-                alert('刪除失敗');
+                alert(data.detail || (lang === 'zh-tw' ? "儲存失敗" : "Save failed"));
             }
-        } catch (e) {
-            console.error("Delete trip failed:", e);
-            alert('刪除行程時發生錯誤');
+        } catch (err) {
+            console.error("Save itinerary error:", err);
+            alert(lang === 'zh-tw' ? "儲存失敗，請重試" : "Save failed, please try again");
         }
-    };
+    }, [user, itinerary, token, lang, showToast, fetchSavedTrips]);
 
-    const fetchUserProfile = async () => {
+    // 登出系統
+    const handleLogout = useCallback(() => {
+        localStorage.removeItem('loka_token');
+        setToken('');
+        setUser(null);
+        setItinerary(null);
+        setCheckedActivities({});
+        setErrorMsg('');
+    }, []);
+
+    // 取得使用者個人資料
+    const fetchUserProfile = useCallback(async () => {
         try {
             const res = await fetch('/api/me', {
                 headers: { 'Authorization': `Bearer ${token}` }
@@ -346,14 +700,70 @@ const App = () => {
         } catch (e) {
             handleLogout();
         }
-    };
+    }, [token, handleLogout]);
 
-    const handleAuth = async (e) => {
+    // 初始化時若有 Token 則自動載入使用者狀態與已存行程
+    useEffect(() => {
+        if (token) {
+            fetchUserProfile();
+            fetchSavedTrips();
+        }
+    }, [token, fetchUserProfile, fetchSavedTrips]);
+
+    // 輪詢檢測全域變數 window.MapComponent 是否已被 Babel standalone 解析完成
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (window.MapComponent) {
+                setMapLoaded(true);
+                clearInterval(interval);
+            }
+        }, 100);
+        return () => clearInterval(interval);
+    }, []);
+
+    // 載入已儲存行程
+    const handleLoadSavedTrip = useCallback((tripData) => {
+        if (!tripData) return;
+        setItinerary(tripData);
+        setCheckedActivities({});
+        
+        // 同步 UI 輸入欄位
+        if (tripData.destination) setDestination(tripData.destination);
+        if (tripData.start_date) setStartDate(tripData.start_date);
+        if (tripData.end_date) setEndDate(tripData.end_date);
+        
+        setShowSavedTripsModal(false);
+        showToast(lang === 'zh-tw' ? '已成功載入行程！' : 'Itinerary loaded successfully!');
+    }, [lang, showToast]);
+
+    // 刪除已儲存行程
+    const handleDeleteSavedTrip = useCallback(async (tripId) => {
+        const confirmMsg = lang === 'zh-tw' ? '確定要刪除此行程嗎？此動作無法復原。' : 'Are you sure you want to delete this itinerary? This action cannot be undone.';
+        if (!confirm(confirmMsg)) return;
+
+        try {
+            const res = await fetch(`/api/trips/${tripId}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                showToast(lang === 'zh-tw' ? '行程已刪除！' : 'Itinerary deleted!');
+                fetchSavedTrips();
+            } else {
+                alert(lang === 'zh-tw' ? '刪除失敗' : 'Delete failed');
+            }
+        } catch (e) {
+            console.error("Delete trip failed:", e);
+            alert(lang === 'zh-tw' ? '刪除行程時發生錯誤' : 'Error deleting trip');
+        }
+    }, [lang, token, fetchSavedTrips, showToast]);
+
+    // 會員註冊或登入
+    const handleAuth = useCallback(async (e) => {
         e.preventDefault();
         setErrorMsg('');
         const url = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
 
-        // 登入只需帳密，註冊時若 email 欄位空白則自動代入默認值
         const payload = authMode === 'login'
             ? { username: usernameInput, password: passwordInput }
             : { username: usernameInput, email: emailInput || `${usernameInput}@loka.com`, password: passwordInput };
@@ -379,30 +789,20 @@ const App = () => {
         } catch (err) {
             setErrorMsg(t.errorAuth);
         }
-    };
+    }, [authMode, usernameInput, emailInput, passwordInput, t]);
 
-    const handleLogout = () => {
-        localStorage.removeItem('loka_token');
-        setToken('');
-        setUser(null);
-        setItinerary(null);
-        setCheckedActivities({});
-        setErrorMsg('');
-    };
-
-    // 升級按鈕觸發：彈出高質感模擬付費 modal
-    const handleUpgrade = () => {
+    // 升級至 Premium
+    const handleUpgrade = useCallback(() => {
         setShowPaywall(true);
-    };
+    }, []);
 
-    // 模擬金流信用卡授權流程 (畢業專題評審審查重點 - 模擬支付回呼迴路)
-    const handleSimulatePayment = async (e) => {
+    // 模擬付費金流
+    const handleSimulatePayment = useCallback(async (e) => {
         e.preventDefault();
         setPaymentLoading(true);
         setErrorMsg('');
 
         try {
-            // 呼叫後端模擬金流 API，發送刷卡資訊
             const res = await fetch('/api/payment/simulate', {
                 method: 'POST',
                 headers: {
@@ -418,25 +818,24 @@ const App = () => {
 
             const data = await res.json();
             if (res.ok) {
-                // 金流成功回呼後，將使用者狀態翻轉為 is_premium = True
                 setUser(prev => ({ ...prev, is_premium: data.is_premium }));
                 setShowPaywall(false);
                 setCardData({ card_number: '', expiry: '', cvv: '' });
                 alert(lang === 'zh-tw' ? '模擬交易成功！您的 LOKA 帳戶已成功解鎖 Premium 尊榮會員資格與匯出工具套件。' : 'Mock transaction successful! Premium privileges unlocked.');
             } else {
-                alert(data.detail || '模擬金流驗證失敗，信用卡卡號必須為 16 位數字。');
+                alert(data.detail || (lang === 'zh-tw' ? '模擬金流驗證失敗，信用卡卡號必須為 16 位數字。' : 'Mock gateway verification failed. Card number must be 16 digits.'));
             }
         } catch (err) {
             console.error("Payment error:", err);
-            alert('模擬金流網關連線異常。');
+            alert(lang === 'zh-tw' ? '模擬金流網關連線異常。' : 'Mock gateway connection error.');
         } finally {
             setPaymentLoading(false);
         }
-    };
+    }, [token, cardData, lang]);
 
-    // Premium 鎖定功能 1：匯出高質感 PDF 行程 HTML 下載
-    const handleExportPdf = () => {
-        if (!user.is_premium) {
+    // 匯出行程為 PDF (HTML)
+    const handleExportPdf = useCallback(() => {
+        if (!user || !user.is_premium) {
             setShowPaywall(true);
             return;
         }
@@ -445,7 +844,6 @@ const App = () => {
         const dest = itinerary.destination;
         const title = `${dest} Bespoke Luxury Escape`;
 
-        // 封裝一份包含精美 Print/網頁 CSS 排版的奢華 HTML 檔案，讓使用者可以輕鬆在瀏覽器「另存 PDF」或列印
         let htmlContent = `
         <!DOCTYPE html>
         <html lang="zh-TW">
@@ -561,8 +959,13 @@ const App = () => {
                     letter-spacing: 0.2em;
                 }
                 @media print {
-                    body { padding: 0; }
-                    .container { border: none; padding: 0; }
+                    body { padding: 0; margin: 0; }
+                    .container { border: none; padding: 20px; }
+                    .no-print { display: none !important; }
+                }
+                @page {
+                    size: A4;
+                    margin: 15mm;
                 }
             </style>
         </head>
@@ -580,12 +983,12 @@ const App = () => {
                 
                 <div class="logistics-section">
                     <div class="logistics-card">
-                        <h5>✈️ Flight Logistics</h5>
+                        <h5>✈️ Flight Recommendation</h5>
                         <p><strong>Carrier:</strong> ${itinerary.flight_logistics?.carrier || "N/A"}</p>
                         <p><strong>Estimated Cost:</strong> ${itinerary.flight_logistics?.estimated_cost || "N/A"}</p>
                     </div>
                     <div class="logistics-card">
-                        <h5>🏨 Hotel Logistics</h5>
+                        <h5>🏨 Hotel Recommendation</h5>
                         <p><strong>Name:</strong> ${itinerary.hotel_logistics?.name || "N/A"}</p>
                         <p><strong>Description:</strong> ${itinerary.hotel_logistics?.description || "N/A"}</p>
                     </div>
@@ -616,23 +1019,26 @@ const App = () => {
         </html>
         `;
 
-        // 使用 Blob 下載 HTML 檔案
-        const blob = new Blob([htmlContent], { type: 'text/html' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `LOKA_Itinerary_${dest.replace(/\s+/g, '_')}.html`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
+        // 開啟新視窗讓瀏覽器原生渲染 HTML，再觸發列印對話框 (選擇「另存為 PDF」)
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) {
+            showToast(lang === 'zh-tw' ? '請允許彈出視窗以匯出 PDF' : 'Please allow popups to export the PDF');
+            return;
+        }
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        // 等待資源載入後自動觸發列印
+        printWindow.onload = () => {
+            setTimeout(() => {
+                printWindow.print();
+            }, 400);
+        };
         showToast(t.pdfDownloaded);
-    };
+    }, [user, itinerary, showToast, t]);
 
-    // Premium 鎖定功能 2：複製專為 Notion 優化的 Markdown 格式區塊
-    const handleCopyNotion = () => {
-        if (!user.is_premium) {
+    // 複製為 Notion 筆記格式
+    const handleCopyNotion = useCallback(() => {
+        if (!user || !user.is_premium) {
             setShowPaywall(true);
             return;
         }
@@ -662,58 +1068,18 @@ const App = () => {
             showToast(t.notionCopied);
         }).catch(err => {
             console.error("Notion Copy Error:", err);
-            alert("複製失敗，請手動選取複製。");
+            alert(lang === 'zh-tw' ? "複製失敗，請手動選取複製。" : "Copy failed, please select manually.");
         });
-    };
+    }, [user, itinerary, showToast, t, lang]);
 
-    // 一鍵儲存行程到雲端資料庫
-    const handleSaveItinerary = async () => {
-        if (!user) return;
-        if (!itinerary) return;
-        try {
-            const res = await fetch('/api/trips/save', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    trip_title: itinerary.title || `${itinerary.destination} Bespoke Escape`,
-                    itinerary_data: itinerary
-                })
-            });
-            const data = await res.json();
-            if (res.ok) {
-                showToast(lang === 'en' ? "Trip saved successfully!" : "行程已成功儲存至雲端！");
-                fetchSavedTrips();
-            } else {
-                alert(data.detail || "儲存失敗");
-            }
-        } catch (err) {
-            console.error("Save itinerary error:", err);
-            alert("儲存失敗，請重試");
-        }
-    };
-
-    // 顯示全域 Toast 微動畫提示
-    const showToast = (message) => {
-        setToastMessage(message);
-        setTimeout(() => {
-            setToastMessage('');
-        }, 3000);
-    };
-
-    // 處理行程生成：將 Wanderlog 的輸入組合為語意化的 Prompt 呼叫 AI
-    const handleGenerate = async (e) => {
+    // 處理行程 AI 生成
+    const handleGenerate = useCallback(async (e) => {
         e.preventDefault();
         if (!destination.trim() || !startDate || !endDate) return;
         setLoading(true);
         setErrorMsg('');
 
-        // 在 handleGenerate 中，截獲有效負載參數以計算天數區間
         const computedDays = Math.max(1, Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24))) + 1;
-
-        // 組裝目的地、人數、度假天數與開始/結束日期，結構化給予 AI
         const prompt = `Create a bespoke travel itinerary in ${destination} starting from ${startDate} to ${endDate} for ${peopleCount} travelers (total duration ${computedDays} days). Ensure a luxurious layout.`;
 
         try {
@@ -723,7 +1089,12 @@ const App = () => {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ prompt: prompt })
+                body: JSON.stringify({
+                    prompt: prompt,
+                    start_date: startDate,
+                    end_date: endDate,
+                    people_count: peopleCount
+                })
             });
 
             const data = await res.json();
@@ -738,25 +1109,83 @@ const App = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [destination, startDate, endDate, peopleCount, token, t]);
 
-    // 一鍵載入巴里島展示行程 (並同步變更輸入欄位數值以求統一)
-    const handleLoadDemo = () => {
+    // 載入展示行程
+    const handleLoadDemo = useCallback(() => {
         setDestination('Bali');
         setPeopleCount(2);
         setStartDate('2026-07-01');
         setEndDate('2026-07-03');
         setItinerary(defaultBaliItinerary);
         setCheckedActivities({});
-    };
+    }, []);
 
-    const toggleActivityCheck = (dayNum, actIdx) => {
+    // 打卡景點切換
+    const toggleActivityCheck = useCallback((dayNum, actIdx) => {
         const key = `${dayNum}-${actIdx}`;
         setCheckedActivities(prev => ({
             ...prev,
             [key]: !prev[key]
         }));
-    };
+    }, []);
+
+    // 移除景點
+    const handleRemovePlace = useCallback((dayIndex, placeIndex) => {
+        setItinerary(prev => {
+            const newDays = prev.days.map((day, dIdx) => {
+                if (dIdx !== dayIndex) return day;
+                return { ...day, places: day.places.filter((_, pIdx) => pIdx !== placeIndex) };
+            });
+            return { ...prev, days: newDays };
+        });
+        // 清除該景點的打卡狀態
+        setCheckedActivities(prev => {
+            const updated = { ...prev };
+            delete updated[`${dayIndex + 1}-${placeIndex}`];
+            return updated;
+        });
+    }, []);
+
+    // 重新生成單一景點
+    const [regeneratingDay, setRegeneratingDay] = useState(null); // dayIndex being regenerated
+    const handleSuggestPlace = useCallback(async (dayNum, dayIndex) => {
+        if (!itinerary || regeneratingDay !== null) return;
+        setRegeneratingDay(dayIndex);
+        const existingTitles = itinerary.days[dayIndex].places.map(p => p.title);
+        try {
+            const res = await fetch('/api/regenerate-place', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    destination: itinerary.destination,
+                    day_number: dayNum,
+                    existing_titles: existingTitles
+                })
+            });
+            if (res.ok) {
+                const newPlace = await res.json();
+                setItinerary(prev => {
+                    const newDays = prev.days.map((day, dIdx) => {
+                        if (dIdx !== dayIndex) return day;
+                        return { ...day, places: [...day.places, newPlace] };
+                    });
+                    return { ...prev, days: newDays };
+                });
+                showToast(lang === 'zh-tw' ? '已成功新增新景點！' : 'New place added!');
+            } else {
+                showToast(lang === 'zh-tw' ? '景點生成失敗，請重試。' : 'Failed to generate place, please try again.');
+            }
+        } catch (e) {
+            console.error("Suggest place failed:", e);
+            showToast(lang === 'zh-tw' ? '連線錯誤，請重試。' : 'Connection error, please try again.');
+        } finally {
+            setRegeneratingDay(null);
+        }
+    }, [itinerary, token, lang, showToast, regeneratingDay]);
 
     // ---------------------------------------------------------------------------
     // 未登入介面 (毛玻璃奢華登入框)
@@ -767,7 +1196,7 @@ const App = () => {
                 {/* 語言切換按鈕 */}
                 <div className="flex justify-end">
                     <button
-                        onClick={() => setLang(lang === 'en' ? 'zh-tw' : 'en')}
+                        onClick={toggleLanguage}
                         className="px-4 py-1.5 rounded-full border border-white/20 text-xs font-semibold hover:bg-white/10 active:scale-95 transition-all text-white"
                     >
                         {lang === 'en' ? '繁體中文 (ZH-TW)' : 'English (EN)'}
@@ -861,7 +1290,7 @@ const App = () => {
     // 登入後主介面 (雙欄奢華工作台)
     // ---------------------------------------------------------------------------
     return (
-        <div className="h-screen w-screen overflow-hidden flex flex-col bg-[#0A3B2E]">
+        <div className="min-h-screen w-full flex flex-col bg-[#0A3B2E]">
             {/* 頂部導航列 (Navbar) */}
             <header className="h-20 border-b border-white/10 flex items-center justify-between px-6 bg-[#0A3B2E]/50 backdrop-blur-md z-50">
                 <div className="flex items-center gap-4">
@@ -893,7 +1322,7 @@ const App = () => {
 
                     {/* 語言切換 */}
                     <button
-                        onClick={() => setLang(lang === 'en' ? 'zh-tw' : 'en')}
+                        onClick={toggleLanguage}
                         className="p-2 hover:bg-white/10 rounded-lg text-xs font-semibold transition-colors"
                     >
                         {lang === 'en' ? '繁中' : 'EN'}
@@ -921,13 +1350,12 @@ const App = () => {
                 </div>
             </header>
 
-            {/* 雙欄主版面配置：實現 50/50 比例水平分割，完美對稱 */}
-            <main className="flex-grow flex overflow-hidden p-6 gap-6 bg-[#0A3B2E]">
-                {/* 左側面板：Wanderlog 輸入區與打卡 Timeline 清單 (佔用 50% 寬度，卡片容器化) */}
-                <div className="w-1/2 bg-[#114D3E]/20 border border-white/10 rounded-2xl flex flex-col overflow-hidden backdrop-blur-sm">
-
-                    {/* AI 行程輸入生成區 (Wanderlog 靈感，高對比白框格線深綠底) */}
-                    <div className="p-6 border-b border-white/10 bg-[#0A3B2E]/40">
+            {/* 雙欄主版面配置：大螢幕下左側行程 65% + 右側地圖 35% (黏性固定) */}
+            <main className="w-full flex flex-col lg:flex-row p-6 gap-6 bg-[#0A3B2E] items-start shrink-0">
+                {/* 左側面板：Wanderlog 輸入區與行程 Timeline 清單 */}
+                <div className="w-full lg:w-[65%] flex flex-col gap-6">
+                    {/* Wanderlog 輸入區 (卡片容器化) */}
+                    <div className="bg-[#114D3E]/20 border border-white/10 rounded-2xl p-6 backdrop-blur-sm">
                         <form onSubmit={handleGenerate} className="space-y-4 bg-white shadow-xl border border-gray-100 rounded-2xl p-6 text-slate-800">
                             {/* 1. Where to go? */}
                             <div className="flex flex-col gap-1.5 pb-2 border-b border-gray-100">
@@ -1028,222 +1456,102 @@ const App = () => {
                         )}
                     </div>
 
-                    {/* 行程 Timeline checklist 滾動顯示區 */}
-                    <div className="flex-grow overflow-y-auto p-6 space-y-6">
+                    {/* 當無行程時，左側面板下方顯示提示 */}
+                    {!itinerary ? (
+                        <div className="bg-[#114D3E]/10 border border-white/10 rounded-2xl p-6 backdrop-blur-sm flex items-center justify-center text-center h-48">
+                            <p className="text-white/40 text-xs leading-relaxed max-w-[280px]">
+                                {t.noItinerary}
+                            </p>
+                        </div>
+                    ) : (
+                        /* 行程 Timeline checklist 網格顯示區 - 移回左側面板且寬度更開闊 */
+                        <div className="w-full h-auto min-h-[600px] grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            <div className="col-span-full mb-2">
+                                <h3 className="text-base font-extrabold tracking-wider text-white/90 uppercase">
+                                    {t.checklistTitle}
+                                </h3>
+                            </div>
 
-                        <h3 className="text-sm font-extrabold tracking-wider text-white/90 uppercase mb-4">
-                            {t.checklistTitle}
-                        </h3>
-
-                        {!itinerary ? (
-                            <div className="h-48 flex items-center justify-center text-center p-4">
-                                <p className="text-white/40 text-xs leading-relaxed max-w-[280px]">
-                                    {t.noItinerary}
+                            {/* 顯示行程主標題 (白底精緻印刷雜誌風卡片) - 跨滿三欄 */}
+                            <div className="col-span-full bg-white shadow-xl border border-gray-100 rounded-2xl p-5 text-slate-800">
+                                <h4 className="text-lg font-black text-slate-900 tracking-wide uppercase">
+                                    🗺️ {itinerary.destination} BESPOKE ESCAPE
+                                </h4>
+                                <p className="text-xs text-slate-500 mt-1 font-semibold">
+                                    📅 {itinerary.start_date} &mdash; {itinerary.end_date}
                                 </p>
                             </div>
-                        ) : (
-                            <div className="relative pl-4 border-l border-white/10 space-y-6">
-                                {/* 顯示行程主標題 (白底精緻印刷雜誌風卡片) */}
-                                <div className="mb-6 bg-white shadow-xl border border-gray-100 rounded-2xl p-5 text-slate-800">
-                                    <h4 className="text-lg font-black text-slate-900 tracking-wide uppercase">
-                                        🗺️ {itinerary.destination} BESPOKE ESCAPE
-                                    </h4>
-                                    <p className="text-xs text-slate-500 mt-1 font-semibold">
-                                        📅 {itinerary.start_date} &mdash; {itinerary.end_date}
-                                    </p>
-                                </div>
 
-                                {/* 🛩️ Logistics Matrix 列 */}
-                                <div className="grid grid-cols-2 gap-4 mb-6">
-                                    {/* Flight Card */}
-                                    <div className="bg-white shadow-xl border border-gray-100 rounded-2xl p-4 text-slate-800 flex flex-col justify-between transition-all duration-200 hover:shadow-md">
-                                        <div>
-                                            <div className="flex items-center gap-1.5 mb-2">
-                                                <span className="text-lg">✈️</span>
-                                                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Flight Logistics</span>
-                                            </div>
-                                            <h5 className="text-xs font-black text-slate-900 mb-1 leading-snug">{itinerary.flight_logistics?.carrier || "Luxury Airline"}</h5>
-                                            <p className="text-[10px] text-slate-600 font-medium mb-3">Est. Cost: {itinerary.flight_logistics?.estimated_cost}</p>
-                                        </div>
-                                        <a
-                                            href={itinerary.flight_logistics?.booking_url || ('https://www.tiket.com/pesawat/search?q=' + (itinerary.flight_logistics?.booking_search_query || ''))}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="w-full py-2 bg-[#0A3B2E] hover:bg-[#114D3E] text-white text-[10px] font-bold rounded-lg text-center transition-all duration-200 flex items-center justify-center gap-1 hover:shadow-md"
-                                        >
-                                            🎟️ Book on tiket.com
-                                        </a>
-                                    </div>
+                            {/* 🛩️ Logistics Section */}
+                            <LogisticsSection itinerary={itinerary} />
 
-                                    {/* Hotel Card */}
-                                    <div className="bg-white shadow-xl border border-gray-100 rounded-2xl p-4 text-slate-800 flex flex-col justify-between transition-all duration-200 hover:shadow-md">
-                                        <div>
-                                            <div className="flex items-center gap-1.5 mb-2">
-                                                <span className="text-lg">🏨</span>
-                                                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Hotel Logistics</span>
-                                            </div>
-                                            <h5 className="text-xs font-black text-slate-900 mb-1 leading-snug">{itinerary.hotel_logistics?.name || "Luxury Resort"}</h5>
-                                            <p className="text-[10px] text-slate-600 leading-relaxed mb-3 line-clamp-2">{itinerary.hotel_logistics?.description}</p>
-                                        </div>
-                                        <div className="flex flex-col gap-1.5">
-                                            <button
-                                                onClick={() => {
-                                                    if (itinerary.hotel_logistics?.latitude && itinerary.hotel_logistics?.longitude) {
-                                                        setFocusedCoords([itinerary.hotel_logistics.latitude, itinerary.hotel_logistics.longitude]);
-                                                    }
-                                                }}
-                                                className="w-full py-1.5 border border-[#0A3B2E] text-[#0A3B2E] hover:bg-gray-50 text-[9px] font-bold rounded-lg transition-all duration-200"
-                                            >
-                                                📍 Show on Map
-                                            </button>
-                                            <a
-                                                href={itinerary.hotel_logistics?.booking_url || ('https://www.tiket.com/hotel/search?q=' + (itinerary.hotel_logistics?.booking_search_query || ''))}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="w-full py-2 bg-[#0A3B2E] hover:bg-[#114D3E] text-white text-[10px] font-bold rounded-lg text-center transition-all duration-200 flex items-center justify-center gap-1 hover:shadow-md"
-                                            >
-                                                🏨 Reserve on tiket.com
-                                            </a>
-                                        </div>
-                                    </div>
-                                </div>
+                            {/* Day cards */}
+                            {itinerary.days.map((day, dayIndex) => (
+                                <DayCard
+                                    key={day.day}
+                                    day={day}
+                                    dayIndex={dayIndex}
+                                    checkedActivities={checkedActivities}
+                                    onToggleCheck={toggleActivityCheck}
+                                    onFocus={(coords) => setFocusedCoords(coords)}
+                                    onRemove={handleRemovePlace}
+                                    onSuggest={handleSuggestPlace}
+                                    regeneratingDay={regeneratingDay}
+                                    lang={lang}
+                                    t={t}
+                                />
+                            ))}
 
-                                {itinerary.days.map((day) => (
-                                    <div key={day.day} className="relative space-y-3">
-                                        {/* 日期與主題標題 */}
-                                        <div className="flex items-center gap-2 -ml-[25px]">
-                                            <span className="w-4 h-4 rounded-full bg-white flex items-center justify-center ring-4 ring-[#0A3B2E]">
-                                                <span className="w-1.5 h-1.5 rounded-full bg-[#0A3B2E]"></span>
+                            {/* Timeline 下方的 Premium 行動按鈕區 - 跨滿三欄 */}
+                            <div className="col-span-full">
+                                {user.is_premium ? (
+                                    <div className="mt-4 p-5 rounded-2xl bg-[#114D3E]/40 border border-white/20 shadow-lg space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <h4 className="text-xs font-black tracking-widest text-[#E2F1ED] uppercase flex items-center gap-1.5">
+                                                💎 {t.paymentTitle}
+                                            </h4>
+                                            <span className="text-[10px] bg-white/20 text-white font-extrabold px-2 py-0.5 rounded tracking-wider">
+                                                UNLOCKED
                                             </span>
-                                            <h5 className="text-xs font-black bg-white/10 px-2.5 py-1 rounded text-white tracking-wider">
-                                                {t.day} {day.day}
-                                            </h5>
                                         </div>
-
-                                        {/* 活動打卡清單 */}
-                                        <div className="h-auto w-full min-h-[500px] grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                            {day.places?.map((place, idx) => {
-                                                const checkedKey = `${day.day}-${idx}`;
-                                                const isChecked = !!checkedActivities[checkedKey];
-
-                                                return (
-                                                    <div
-                                                        key={idx}
-                                                        onClick={() => setFocusedCoords([place.latitude, place.longitude])}
-                                                        className={`rounded-xl border cursor-pointer select-none transition-all duration-200 overflow-hidden ${isChecked
-                                                            ? 'bg-gray-50 border-gray-200 opacity-50 text-slate-400'
-                                                            : 'bg-white hover:shadow-lg border-gray-100 shadow-md text-slate-800'
-                                                            }`}
-                                                    >
-                                                        {/* 卡片頂部 Unsplash 圖片 (含優雅的後備載入機制) */}
-                                                         <GracefulImage
-                                                             src={place.image_url}
-                                                             alt={place.title}
-                                                             title={place.title}
-                                                         />
-
-                                                         <div className="p-4">
-                                                             <div className="flex items-start gap-3">
-                                                                 {/* 客製化 Checkbox */}
-                                                                 <div className="mt-0.5" onClick={(e) => {
-                                                                     e.stopPropagation();
-                                                                     toggleActivityCheck(day.day, idx);
-                                                                 }}>
-                                                                     <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${isChecked
-                                                                         ? 'bg-[#0A3B2E] border-[#0A3B2E]'
-                                                                         : 'border-gray-300 bg-white'
-                                                                         }`}>
-                                                                         {isChecked && (
-                                                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 text-white" viewBox="0 0 20 20" fill="currentColor">
-                                                                                 <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                                                             </svg>
-                                                                         )}
-                                                                     </div>
-                                                                 </div>
-
-                                                                 {/* 景點資訊 */}
-                                                                 <div className="flex-grow">
-                                                                     <h6 className={`text-xs font-extrabold text-slate-900 transition-all ${isChecked ? 'line-through text-slate-400' : ''}`}>
-                                                                         {place.title}
-                                                                     </h6>
-                                                                     <p className={`text-[10px] text-slate-500 leading-relaxed mt-1.5 transition-all ${isChecked ? 'line-through text-slate-300' : ''}`}>
-                                                                         {place.description}
-                                                                     </p>
-                                                                     
-                                                                     {/* 底部按鈕區 */}
-                                                                     <div className="mt-3 flex items-center justify-between">
-                                                                         <span className="text-slate-400 text-[9px] font-bold">D{day.day}-{idx + 1}</span>
-                                                                         <a
-                                                                             href={'https://www.google.com/maps/search/?api=1&query=' + place.maps_search_query}
-                                                                             target="_blank"
-                                                                             rel="noopener noreferrer"
-                                                                             onClick={(e) => e.stopPropagation()}
-                                                                             className="inline-flex items-center gap-1 py-1.5 px-3 bg-[#0A3B2E] hover:bg-[#114D3E] text-white rounded-lg text-[9px] font-bold transition-all duration-200 hover:shadow-md active:scale-95"
-                                                                         >
-                                                                             📍 View in Google Maps
-                                                                         </a>
-                                                                     </div>
-                                                                 </div>
-                                                             </div>
-                                                         </div>
-                                                     </div>
-                                                 );
-                                             })}
-                                         </div>
-                                     </div>
-                                 ))}
+                                        <div className="grid grid-cols-3 gap-4">
+                                            <button
+                                                onClick={handleExportPdf}
+                                                className="py-3 px-4 bg-white text-[#0A3B2E] hover:bg-[#E2F1ED] font-bold text-sm rounded-xl shadow transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                                            >
+                                                <span>{t.exportPdfBtn}</span>
+                                            </button>
+                                            <button
+                                                onClick={handleCopyNotion}
+                                                className="py-3 px-4 bg-[#114D3E] hover:bg-[#114D3E]/80 text-white font-bold text-sm rounded-xl border border-white/20 transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                                            >
+                                                <span>{t.copyNotionBtn}</span>
+                                            </button>
+                                            <button
+                                                onClick={handleSaveItinerary}
+                                                className="py-3 px-4 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-sm rounded-xl border border-white/20 transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                                            >
+                                                <span>{t.saveTripBtn}</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="mt-4">
+                                        <button
+                                            onClick={() => setShowPaywall(true)}
+                                            className="w-full py-3.5 bg-gradient-to-r from-amber-500 via-amber-600 to-yellow-600 hover:from-amber-600 hover:to-yellow-700 text-white font-black text-sm rounded-xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 tracking-wider uppercase border border-white/20"
+                                        >
+                                            <span>🔒 Export to Notion / PDF Handout</span>
+                                        </button>
+                                    </div>
+                                )}
                             </div>
-                        )}
-
-                        {/* Timeline 下方的 Premium 行動按鈕區 */}
-                        {itinerary && (
-                            user.is_premium ? (
-                                <div className="mt-6 p-4 rounded-2xl bg-[#114D3E]/40 border border-white/20 shadow-lg space-y-3">
-                                    <div className="flex items-center justify-between">
-                                        <h4 className="text-[10px] font-black tracking-widest text-[#E2F1ED] uppercase flex items-center gap-1.5">
-                                            💎 {t.paymentTitle}
-                                        </h4>
-                                        <span className="text-[8px] bg-white/20 text-white font-extrabold px-1.5 py-0.5 rounded tracking-wider">
-                                            UNLOCKED
-                                        </span>
-                                    </div>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        <button
-                                            onClick={handleExportPdf}
-                                            className="py-2.5 px-3 bg-white text-[#0A3B2E] hover:bg-[#E2F1ED] font-bold text-xs rounded-xl shadow transition-all active:scale-95 flex items-center justify-center gap-1.5"
-                                        >
-                                            <span>{t.exportPdfBtn}</span>
-                                        </button>
-                                        <button
-                                            onClick={handleCopyNotion}
-                                            className="py-2.5 px-3 bg-[#114D3E] hover:bg-[#114D3E]/80 text-white font-bold text-xs rounded-xl border border-white/20 transition-all active:scale-95 flex items-center justify-center gap-1.5"
-                                        >
-                                            <span>{t.copyNotionBtn}</span>
-                                        </button>
-                                        <button
-                                            onClick={handleSaveItinerary}
-                                            className="py-2.5 px-3 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl border border-white/20 transition-all active:scale-95 flex items-center justify-center gap-1.5"
-                                        >
-                                            <span>{t.saveTripBtn}</span>
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="mt-6">
-                                    <button
-                                        onClick={() => setShowPaywall(true)}
-                                        className="w-full py-3 bg-gradient-to-r from-amber-500 via-amber-600 to-yellow-600 hover:from-amber-600 hover:to-yellow-700 text-white font-black text-xs rounded-xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 tracking-wider uppercase border border-white/20"
-                                    >
-                                        <span>🔒 Export to Notion / PDF Handout</span>
-                                    </button>
-                                </div>
-                            )
-                        )}
-                    </div>
+                        </div>
+                    )}
                 </div>
 
-                {/* 右側面板：地圖展示與導航 (佔用 50% 寬度，卡片容器化) */}
-                <div className="w-1/2 h-full flex flex-col overflow-hidden">
+                {/* 右側面板：地圖展示與導航 (卡片容器化，Sticky top) */}
+                <div className="w-full lg:w-[35%] lg:sticky lg:top-6 h-[500px] lg:h-[calc(100vh-120px)] flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#114D3E]/20 shrink-0">
                     {/* 安全檢測防護：當 window.MapComponent 載入完成後才進行渲染 */}
                     {mapLoaded && window.MapComponent ? (
                         <window.MapComponent
@@ -1252,183 +1560,35 @@ const App = () => {
                             focusedCoords={focusedCoords}
                         />
                     ) : (
-                        <div className="w-full h-full flex items-center justify-center text-xs text-white/40 border border-white/10 rounded-2xl bg-[#114D3E]/20">
+                        <div className="w-full h-full flex items-center justify-center text-xs text-white/40 border border-none bg-transparent">
                             <span className="animate-pulse">Loading Luxury Map Canvas...</span>
                         </div>
                     )}
                 </div>
             </main>
 
-            {/* 奢華透明毛玻璃付費 Modal overlay (模擬金流支付介面) */}
+            {/* Paywall Modal */}
             {showPaywall && (
-                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 backdrop-blur-md p-4">
-                    <div className="w-full max-w-md bg-[#0A3B2E]/60 backdrop-blur-xl border border-white/20 shadow-2xl rounded-3xl p-8 relative transform scale-100 transition-all duration-300">
-                        {/* 關閉按鈕 */}
-                        <button
-                            onClick={() => setShowPaywall(false)}
-                            className="absolute top-4 right-4 w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 border border-white/15 flex items-center justify-center text-white/70 hover:text-white transition-all text-xs"
-                        >
-                            ✕
-                        </button>
-
-                        {/* 鎖頭 icon */}
-                        <div className="w-14 h-14 mx-auto mb-5 bg-white/10 border border-white/20 rounded-full flex items-center justify-center shadow-inner">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                            </svg>
-                        </div>
-
-                        <h3 className="text-xl font-black text-white text-center mb-2 tracking-wide uppercase">{t.paymentTitle}</h3>
-                        <p className="text-white/60 text-xs text-center mb-6 leading-relaxed">
-                            {t.paymentDesc}
-                        </p>
-
-                        <form onSubmit={handleSimulatePayment} className="space-y-4">
-                            <div>
-                                <label className="block text-[9px] font-bold uppercase tracking-wider text-white/70 mb-1.5">{t.cardNumberLabel}</label>
-                                <input
-                                    type="text"
-                                    required
-                                    maxLength="19"
-                                    placeholder="4111 2222 3333 4444"
-                                    value={cardData.card_number}
-                                    onChange={(e) => {
-                                        let val = e.target.value.replace(/\D/g, '');
-                                        let formatted = val.match(/.{1,4}/g)?.join(' ') || val;
-                                        setCardData(prev => ({ ...prev, card_number: formatted }));
-                                    }}
-                                    className="w-full bg-white/5 border border-white/20 text-white rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-white/20 focus:bg-white/10 transition-all placeholder-white/20"
-                                />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-[9px] font-bold uppercase tracking-wider text-white/70 mb-1.5">{t.expiryLabel}</label>
-                                    <input
-                                        type="text"
-                                        required
-                                        maxLength="5"
-                                        placeholder="12/28"
-                                        value={cardData.expiry}
-                                        onChange={(e) => {
-                                            let val = e.target.value.replace(/\D/g, '');
-                                            if (val.length > 2) {
-                                                val = val.substring(0, 2) + '/' + val.substring(2, 4);
-                                            }
-                                            setCardData(prev => ({ ...prev, expiry: val }));
-                                        }}
-                                        className="w-full bg-white/5 border border-white/20 text-white rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-white/20 focus:bg-white/10 transition-all placeholder-white/20 text-center"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-[9px] font-bold uppercase tracking-wider text-white/70 mb-1.5">{t.cvvLabel}</label>
-                                    <input
-                                        type="password"
-                                        required
-                                        maxLength="3"
-                                        placeholder="***"
-                                        value={cardData.cvv}
-                                        onChange={(e) => setCardData(prev => ({ ...prev, cvv: e.target.value.replace(/\D/g, '') }))}
-                                        className="w-full bg-white/5 border border-white/20 text-white rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-white/20 focus:bg-white/10 transition-all placeholder-white/20 text-center"
-                                    />
-                                </div>
-                            </div>
-
-                            <button
-                                type="submit"
-                                disabled={paymentLoading}
-                                className="w-full py-3 bg-white text-[#0A3B2E] font-bold rounded-xl shadow-lg hover:bg-[#E2F1ED] active:scale-95 transition-all duration-200 mt-2 text-xs flex items-center justify-center gap-2"
-                            >
-                                {paymentLoading ? (
-                                    <>
-                                        <svg className="animate-spin h-3.5 w-3.5 text-[#0A3B2E]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4}></circle>
-                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                        </svg>
-                                        <span>{t.processingPay}</span>
-                                    </>
-                                ) : t.simulatePayBtn}
-                            </button>
-                        </form>
-                    </div>
-                </div>
+                <PaywallModal
+                    onClose={() => setShowPaywall(false)}
+                    onSubmit={handleSimulatePayment}
+                    cardData={cardData}
+                    setCardData={setCardData}
+                    paymentLoading={paymentLoading}
+                    t={t}
+                />
             )}
 
-            {/* 歷史儲存行程管理 Modal (奢華毛玻璃風格) */}
+            {/* Saved Trips Modal */}
             {showSavedTripsModal && (
-                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-md p-4">
-                    <div className="w-full max-w-2xl bg-[#0A3B2E]/75 backdrop-blur-xl border border-white/20 shadow-2xl rounded-3xl p-8 relative flex flex-col max-h-[85vh] transform scale-100 transition-all duration-300">
-                        {/* 關閉按鈕 */}
-                        <button
-                            onClick={() => setShowSavedTripsModal(false)}
-                            className="absolute top-4 right-4 w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 border border-white/15 flex items-center justify-center text-white/70 hover:text-white transition-all text-xs"
-                        >
-                            ✕
-                        </button>
-
-                        <h3 className="text-xl font-black text-white mb-6 tracking-wide uppercase flex items-center gap-2">
-                            <span>🔖</span> {t.savedTripsTitle}
-                        </h3>
-
-                        {savedTripsLoading ? (
-                            <div className="flex-grow flex items-center justify-center py-20 text-white/50 text-xs">
-                                <span className="animate-pulse">Loading saved itineraries...</span>
-                            </div>
-                        ) : savedTrips.length === 0 ? (
-                            <div className="flex-grow flex flex-col items-center justify-center py-20 text-center px-4">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-white/20 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                                </svg>
-                                <p className="text-white/40 text-xs leading-relaxed max-w-sm">
-                                    {t.noSavedTrips}
-                                </p>
-                            </div>
-                        ) : (
-                            <div className="flex-grow overflow-y-auto pr-1 space-y-4 max-h-[55vh]">
-                                {savedTrips.map((trip) => (
-                                    <div
-                                        key={trip.id}
-                                        className="bg-white/5 border border-white/10 hover:border-white/20 rounded-2xl p-5 flex items-center justify-between gap-4 transition-all hover:bg-white/10"
-                                    >
-                                        <div className="flex-grow min-w-0">
-                                            <h4 className="text-sm font-bold text-white truncate">
-                                                {trip.trip_title}
-                                            </h4>
-                                            <div className="flex items-center gap-3 mt-1.5 text-[10px] text-white/50 font-medium">
-                                                <span>📅 {trip.itinerary_data?.start_date || "N/A"} ~ {trip.itinerary_data?.end_date || "N/A"}</span>
-                                                <span>•</span>
-                                                <span>{new Date(trip.created_at).toLocaleDateString()}</span>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-2.5 shrink-0">
-                                            <button
-                                                onClick={() => handleLoadSavedTrip(trip.itinerary_data)}
-                                                className="py-1.5 px-4 bg-white text-[#0A3B2E] font-bold text-xs rounded-xl shadow hover:bg-[#E2F1ED] active:scale-95 transition-all"
-                                            >
-                                                {t.loadTrip}
-                                            </button>
-                                            <button
-                                                onClick={() => handleDeleteSavedTrip(trip.id)}
-                                                className="py-1.5 px-3 bg-red-950/40 border border-red-500/30 hover:bg-red-900/40 hover:border-red-500/50 text-red-200 font-bold text-xs rounded-xl transition-all active:scale-95"
-                                            >
-                                                {t.deleteTrip}
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                        
-                        <div className="mt-6 pt-4 border-t border-white/10 flex justify-end">
-                            <button
-                                onClick={() => setShowSavedTripsModal(false)}
-                                className="py-2 px-6 bg-white/5 border border-white/10 hover:bg-white/10 text-white text-xs font-semibold rounded-xl transition-all"
-                            >
-                                {t.close}
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <SavedTripsModal
+                    onClose={() => setShowSavedTripsModal(false)}
+                    loading={savedTripsLoading}
+                    trips={savedTrips}
+                    onLoad={handleLoadSavedTrip}
+                    onDelete={handleDeleteSavedTrip}
+                    t={t}
+                />
             )}
 
             {/* 奢華 Toast 微動畫提示 */}

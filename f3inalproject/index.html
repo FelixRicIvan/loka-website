@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LOKA | Bespoke Luxury Travel Planner</title>
+    <title>LOKA | Helping you uncover the beauty of the world.</title>
     <meta name="description" content="LOKA 是一款超輕量奢華風格旅行規劃助手，結合 AI 提供巴里島行程與真實道路導航規劃。">
 
     <!-- 引入高質感 Google Font (Outfit) -->
@@ -48,6 +48,7 @@
     <!-- Leaflet JS (本地伺服) -->
     <script src="/static/leaflet.js"></script>
 
+
     <style>
         /* 全域樣式微調 */
         body {
@@ -83,7 +84,7 @@
     </style>
 </head>
 
-<body class="h-screen w-screen overflow-hidden flex flex-col">
+<body class="min-h-screen w-screen flex flex-col">
     <!-- 全域錯誤與協定檢測 -->
     <script>
         // 渲染診斷訊息的通用函式
@@ -171,7 +172,7 @@
     </script>
 
     <!-- React 掛載點 -->
-    <div id="root" class="flex-grow flex flex-col h-full w-full"></div>
+    <div id="root" class="flex-grow flex flex-col w-full"></div>
 
     <!-- 載入 React JSX 元件，注意載入順序 (MapComponent 先，App 後) -->
     <script type="text/babel" src="MapComponent.jsx"></script>
